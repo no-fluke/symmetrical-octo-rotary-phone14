@@ -34,7 +34,6 @@ class CompleteCourseBot:
     def __init__(self, token):
         self.token = token
         self.application = Application.builder().token(token).build()
-        self.api_base_url = "https://backend.multistreaming.site/api"
         self.user_sessions = {}
         self.setup_handlers()
         
@@ -58,13 +57,12 @@ class CompleteCourseBot:
             }
         
         welcome_text = """
-🤖 **Complete Course Data Bot**
+🤖 **Mathematics Course Bot**
 
-I can fetch complete course data from APIs including:
+I can generate structured course files from provided content including:
 
 • **Video Lectures** with quality preference
 • **Class PDFs** (study materials)
-• **Practice Sheets** (test papers)
 • Organized by topics and classes
 
 **Commands:**
@@ -83,7 +81,7 @@ I can fetch complete course data from APIs including:
 📖 **Complete Help Guide**
 
 **How to use:**
-1. `/batches` - See all available courses
+1. `/batches` - See available courses
 2. Select a course from the list
 3. `/get_course` - Generate complete data file
 4. Receive a .txt file with everything organized
@@ -91,45 +89,32 @@ I can fetch complete course data from APIs including:
 **What's included in the file:**
 ✅ **VIDEO LECTURES** - Class videos in your preferred quality
 ✅ **CLASS PDFs** - Study materials for each class
-✅ **PRACTICE SHEETS** - Test papers organized by topic
 ✅ **TEACHER INFORMATION** - Who taught each class
 
 **Video Quality Options:**
-- 240p (Lowest quality, smallest file)
-- 360p (Good for mobile data)
-- 480p (Standard quality)
-- 720p (HD - Recommended)
+- 720p (HD - Default)
 - 1080p (Full HD - if available)
 
-**API Endpoints Used:**
-• Video Classes: `/api/courses/{id}/classes?populate=full`
-• Practice Sheets: `/api/courses/{id}/pdfs?groupBy=topic`
-
-**Note:** The bot fetches real-time data from the APIs.
+**Note:** The bot generates structured files from provided course data.
         """
         await update.message.reply_text(help_text, parse_mode='Markdown')
         
     async def batches_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show available courses with example data"""
+        """Show available courses"""
         await update.message.reply_text("📚 Fetching available courses...")
         
         try:
-            # Example courses - you can modify these or fetch from an API
+            # Example courses based on your text file
             courses = [
                 {
-                    "id": "695b8c182feca20f81c25e42", 
-                    "title": "RRB Group-D Target Batch (Complete)",
-                    "description": "Complete RRB Group-D preparation with videos and practice sheets"
+                    "id": "maths_special_1",
+                    "title": "Mathematics Special Course - Part 1",
+                    "description": "Complete mathematics course with Number System, Calculation, Surds, LCM/HCF, Mensuration, Problem on Ages"
                 },
                 {
-                    "id": "68dbdf3a63a1698bf4194576", 
-                    "title": "Science Foundation Course",
-                    "description": "Physics, Chemistry, Biology with practice materials"
-                },
-                {
-                    "id": "68e7b6e6aaf4383d1192dfb6", 
-                    "title": "Mathematics Master Course",
-                    "description": "Complete math syllabus with problem sheets"
+                    "id": "full_maths_course",
+                    "title": "Complete Mathematics Master Course",
+                    "description": "All mathematics topics from Class 01 to Class 21"
                 }
             ]
             
@@ -153,14 +138,12 @@ I can fetch complete course data from APIs including:
             await update.message.reply_text(
                 "📚 **Available Courses:**\n\n"
                 "Select a course to generate its complete data file:\n\n"
-                "1. **RRB Group-D Target Batch** - Complete preparation\n"
-                "2. **Science Foundation Course** - Physics, Chemistry, Biology\n"
-                "3. **Mathematics Master Course** - Complete math syllabus\n\n"
+                "1. **Mathematics Special Course - Part 1**\n   Complete math topics with videos and PDFs\n\n"
+                "2. **Complete Mathematics Master Course**\n   All math classes from 01 to 21\n\n"
                 "Each file will include:\n"
                 "• Video lecture links\n"
                 "• Class PDF materials\n"
-                "• Practice sheets\n"
-                "• Organized by topics",
+                "• Organized by topics and classes",
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
@@ -191,34 +174,37 @@ I can fetch complete course data from APIs including:
         preferred_quality = session['preferred_quality']
         
         await update.message.reply_text(
-            f"📡 **Fetching Complete Data for:** {course_title}\n"
+            f"📡 **Generating Complete Data for:** {course_title}\n"
             f"🎥 **Video Quality:** {preferred_quality.upper()}\n"
-            f"⏳ **Fetching:**\n"
-            f"   • Video lectures and class PDFs ✓\n"
-            f"   • Practice sheets and test papers ✓\n\n"
+            f"⏳ **Processing:**\n"
+            f"   • Parsing course content ✓\n"
+            f"   • Organizing by topics and classes ✓\n"
+            f"   • Generating structured file ✓\n\n"
             f"Please wait, this may take a moment..."
         )
         
         try:
-            # Fetch data from both APIs
-            video_data = await self.fetch_video_data(course_id)
-            practice_data = await self.fetch_practice_data(course_id)
+            # Read the provided text file content
+            with open('Maths_Special-1 (2).txt', 'r', encoding='utf-8') as f:
+                file_content = f.read()
             
-            if not video_data and not practice_data:
-                await update.message.reply_text("❌ No data found for this course.")
-                return
+            # Parse the content
+            parsed_data = self.parse_course_content(file_content)
             
             # Generate complete text file
-            text_content = self.generate_complete_file(
-                video_data, 
-                practice_data, 
+            text_content = self.generate_structured_file(
+                parsed_data, 
                 course_title, 
                 preferred_quality
             )
             
             # Create filename
             safe_title = ''.join(c for c in course_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            filename = f"{safe_title.replace(' ', '_')}_Complete_{datetime.now().strftime('%Y%m%d')}.txt"
+            filename = f"{safe_title.replace(' ', '_')}_Complete_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+            
+            # Count totals
+            total_classes = len(parsed_data['entries'])
+            total_pdfs = sum(1 for entry in parsed_data['entries'] if entry['pdf_url'])
             
             # Send file
             await update.message.reply_document(
@@ -227,66 +213,124 @@ I can fetch complete course data from APIs including:
                 caption=(
                     f"✅ **{course_title}**\n\n"
                     f"📊 **Contains:**\n"
-                    f"• Video lectures ({preferred_quality.upper()})\n"
-                    f"• Class PDF materials\n"
-                    f"• Practice sheets\n"
-                    f"• Organized by topics\n\n"
+                    f"• {total_classes} Video lectures ({preferred_quality.upper()})\n"
+                    f"• {total_pdfs} Class PDF materials\n"
+                    f"• Organized by topics and classes\n\n"
                     f"📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 ),
                 parse_mode='Markdown'
             )
             
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error: {e}")
-            await update.message.reply_text("❌ Network error. Please check your connection and try again.")
+        except FileNotFoundError:
+            await update.message.reply_text("❌ Course data file not found.")
         except Exception as e:
             logger.error(f"Error generating file: {e}")
             await update.message.reply_text("❌ Error generating course file. Please try again.")
             
-    async def fetch_video_data(self, course_id):
-        """Fetch video classes and class PDFs from API"""
-        try:
-            api_url = f"{self.api_base_url}/courses/{course_id}/classes?populate=full"
-            logger.info(f"Fetching video data from: {api_url}")
-            
-            response = requests.get(api_url, timeout=30)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if data.get('state') != 200:
-                logger.error(f"Video API error: {data.get('msg')}")
-                return None
+    def parse_course_content(self, content):
+        """Parse the text file content into structured data"""
+        lines = content.strip().split('\n')
+        entries = []
+        topics_set = set()
+        current_video_entry = None
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
                 
-            return data.get('data', {})
-            
-        except Exception as e:
-            logger.error(f"Error fetching video data: {e}")
-            return None
-            
-    async def fetch_practice_data(self, course_id):
-        """Fetch practice sheets from API"""
-        try:
-            api_url = f"{self.api_base_url}/courses/{course_id}/pdfs?groupBy=topic"
-            logger.info(f"Fetching practice data from: {api_url}")
-            
-            response = requests.get(api_url, timeout=30)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if data.get('state') != 200:
-                logger.error(f"Practice API error: {data.get('msg')}")
-                return None
+            # Check if it's a video entry
+            if line.startswith('Class-'):
+                # This is a video entry
+                parts = line.split(': https://')
+                if len(parts) < 2:
+                    continue
+                    
+                title_part = parts[0].strip()
+                video_url = 'https://' + parts[1].strip()
                 
-            return data.get('data', {})
-            
-        except Exception as e:
-            logger.error(f"Error fetching practice data: {e}")
-            return None
-            
-    def generate_complete_file(self, video_data, practice_data, course_title, preferred_quality):
-        """Generate complete text file with videos and practice sheets"""
+                # Parse the title to extract information
+                title_parts = title_part.split('||')
+                if len(title_parts) < 3:
+                    continue
+                    
+                class_info = title_parts[0].strip()
+                topic_info = title_parts[2].strip()
+                
+                # Extract class number
+                class_num = class_info.replace('Class-', '').strip()
+                
+                # Extract topic
+                topic_parts = topic_info.split('|')
+                topic = topic_parts[0].strip()
+                
+                # Extract teacher
+                teacher = "Gagan sir"
+                if 'Gagan Pratap' in line:
+                    teacher = "Gagan Pratap"
+                elif 'GAGAN PRATAP' in line:
+                    teacher = "Gagan Pratap"
+                elif 'GAGAN SIR' in line:
+                    teacher = "Gagan sir"
+                
+                topics_set.add(topic)
+                
+                # Create video entry
+                current_video_entry = {
+                    'class_num': class_num,
+                    'topic': topic,
+                    'teacher': teacher,
+                    'video_url': video_url,
+                    'pdf_url': None,
+                    'pdf_name': None
+                }
+                
+            # Check if it's a PDF entry (usually follows a video entry)
+            elif line.startswith('http') and 'pdf' in line and current_video_entry:
+                # This is a PDF URL
+                pdf_url = line.strip()
+                pdf_name = "Class PDF"
+                
+                # Try to extract PDF name from previous context
+                for i in range(len(lines) - 1, -1, -1):
+                    if lines[i] == line:
+                        if i > 0 and not lines[i-1].startswith('http'):
+                            pdf_name = lines[i-1].split(':')[0].strip()
+                            break
+                
+                current_video_entry['pdf_url'] = pdf_url
+                current_video_entry['pdf_name'] = pdf_name
+                entries.append(current_video_entry.copy())
+                current_video_entry = None
+                
+            elif 'pdfs/files/' in line and current_video_entry:
+                # Alternative PDF format
+                pdf_url = line.strip()
+                pdf_name = "Class PDF"
+                
+                # Extract name from URL
+                if 'pdfs/files/' in pdf_url:
+                    name_part = pdf_url.split('pdfs/files/')[1]
+                    if '/' in name_part:
+                        name_part = name_part.split('/')[0]
+                    pdf_name = name_part.replace('.pdf', '').replace('_', ' ').title()
+                
+                current_video_entry['pdf_url'] = pdf_url
+                current_video_entry['pdf_name'] = pdf_name
+                entries.append(current_video_entry.copy())
+                current_video_entry = None
+        
+        # Add any remaining video entry without PDF
+        if current_video_entry:
+            entries.append(current_video_entry)
+        
+        return {
+            'entries': entries,
+            'topics': sorted(list(topics_set))
+        }
+        
+    def generate_structured_file(self, parsed_data, course_title, preferred_quality):
+        """Generate structured text file from parsed data"""
         lines = []
         
         # Header
@@ -296,165 +340,68 @@ I can fetch complete course data from APIs including:
         lines.append("")
         lines.append("GENERATED BY TELEGRAM COURSE BOT")
         lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"Video Quality Preference: {preferred_quality.upper()}")
+        lines.append(f"Video Quality: {preferred_quality.upper()}")
         lines.append("")
         lines.append("This file contains:")
-        lines.append("1. Video Lecture Links (with quality options)")
+        lines.append("1. Video Lecture Links")
         lines.append("2. Class PDF Materials")
-        lines.append("3. Practice Sheets (Topic-wise)")
-        lines.append("4. Teacher Information")
+        lines.append("3. Teacher Information")
+        lines.append("4. Organized by Topics and Classes")
         lines.append("")
         lines.append("=" * 80)
         lines.append("")
         
-        # Get course info
-        course_info = video_data.get('course', {}) if video_data else {}
-        if course_info:
-            lines.append(f"COURSE INFORMATION:")
-            lines.append(f"Title: {course_info.get('title', 'N/A')}")
-            lines.append(f"ID: {course_info.get('id', 'N/A')}")
-            lines.append(f"Type: {'Live' if course_info.get('isLive') else 'Recorded'}")
-            lines.append(f"Status: {'Free' if course_info.get('isFree') else 'Paid'}")
-            lines.append("")
+        # Course Information
+        lines.append("COURSE INFORMATION:")
+        lines.append(f"Title: {course_title}")
+        lines.append(f"Total Topics: {len(parsed_data['topics'])}")
+        lines.append(f"Total Classes: {len(parsed_data['entries'])}")
+        lines.append("")
         
-        # Get topics from video data
-        video_topics = video_data.get('classes', []) if video_data else []
+        # Group entries by topic
+        entries_by_topic = {}
+        for entry in parsed_data['entries']:
+            topic = entry['topic']
+            if topic not in entries_by_topic:
+                entries_by_topic[topic] = []
+            entries_by_topic[topic].append(entry)
         
-        # Get practice topics
-        practice_topics = practice_data.get('pdfs', []) if practice_data else []
-        
-        # Create a combined list of all topics
-        all_topic_ids = set()
-        
-        # Add video topic IDs
-        for topic in video_topics:
-            topic_id = topic.get('topicId')
-            if topic_id:
-                all_topic_ids.add(topic_id)
-        
-        # Add practice topic IDs
-        for topic in practice_topics:
-            topic_id = topic.get('topicId')
-            if topic_id:
-                all_topic_ids.add(topic_id)
+        # Sort entries within each topic by class number
+        for topic in entries_by_topic:
+            entries_by_topic[topic].sort(key=lambda x: int(x['class_num']) if x['class_num'].isdigit() else 0)
         
         # Process each topic
-        for topic_id in all_topic_ids:
-            # Find topic in video data
-            video_topic = next((t for t in video_topics if t.get('topicId') == topic_id), None)
-            
-            # Find topic in practice data
-            practice_topic = next((t for t in practice_topics if t.get('topicId') == topic_id), None)
-            
-            topic_name = "Unknown Topic"
-            if video_topic:
-                topic_name = video_topic.get('topicName', 'Unknown Topic')
-            elif practice_topic:
-                topic_name = practice_topic.get('topicName', 'Unknown Topic')
-            
-            # Topic Header
+        for topic in sorted(entries_by_topic.keys()):
             lines.append("")
             lines.append("=" * 80)
-            lines.append(f"TOPIC: {topic_name.upper()}")
+            lines.append(f"TOPIC: {topic.upper()}")
             lines.append("=" * 80)
             lines.append("")
             
-            # VIDEO CLASSES SECTION
-            if video_topic and video_topic.get('classes'):
-                lines.append("📺 VIDEO LECTURES:")
-                lines.append("-" * 40)
-                
-                classes = video_topic['classes']
-                # Sort classes by priority if available
-                classes.sort(key=lambda x: x.get('priority', 999))
-                
-                for class_item in classes:
-                    # Class info
-                    class_title = class_item.get('title', 'No Title')
-                    teacher = class_item.get('teacherName', 'Unknown Teacher')
-                    class_id = class_item.get('classId', '')
-                    
-                    lines.append("")
-                    lines.append(f"📋 Class: {class_title}")
-                    lines.append(f"👨‍🏫 Teacher: {teacher}")
-                    
-                    # Video links
-                    video_links = []
-                    
-                    # YouTube link
-                    class_link = class_item.get('class_link', '')
-                    if class_link and 'youtube.com' in class_link:
-                        video_links.append(f"🎬 YouTube: {class_link}")
-                    
-                    # MP4 recordings with preferred quality
-                    mp4_recordings = class_item.get('mp4Recordings', [])
-                    if mp4_recordings:
-                        # Try to find preferred quality
-                        found = False
-                        for recording in mp4_recordings:
-                            quality = recording.get('quality', '').lower()
-                            url = recording.get('url', '')
-                            if url and quality == preferred_quality.lower():
-                                video_links.append(f"🎥 {quality.upper()}: {url}")
-                                found = True
-                                break
-                        
-                        # If preferred quality not found, show all available
-                        if not found:
-                            for recording in mp4_recordings:
-                                quality = recording.get('quality', '').upper()
-                                url = recording.get('url', '')
-                                if url:
-                                    video_links.append(f"🎥 {quality}: {url}")
-                    
-                    # Add video links to output
-                    if video_links:
-                        for link in video_links:
-                            lines.append(link)
-                    else:
-                        lines.append("❌ No video recordings available")
-                    
-                    # CLASS PDFs (Study Materials)
-                    class_pdfs = class_item.get('classPdf', [])
-                    if class_pdfs:
-                        lines.append("")
-                        lines.append("📄 CLASS PDF MATERIALS:")
-                        for pdf in class_pdfs:
-                            pdf_name = pdf.get('name', 'Unnamed PDF')
-                            pdf_url = pdf.get('url', '')
-                            if pdf_url:
-                                lines.append(f"   • {pdf_name}")
-                                lines.append(f"     📎 {pdf_url}")
-                    
-                    lines.append("-" * 40)
-                
-                lines.append("")
+            lines.append("📺 VIDEO LECTURES & CLASS MATERIALS:")
+            lines.append("-" * 40)
+            lines.append("")
             
-            # PRACTICE SHEETS SECTION
-            if practice_topic and practice_topic.get('pdfs'):
-                lines.append("📝 PRACTICE SHEETS & TEST PAPERS:")
+            for entry in entries_by_topic[topic]:
+                # Class info
+                lines.append(f"📋 Class-{entry['class_num']}: {entry['topic']}")
+                lines.append(f"👨‍🏫 Teacher: {entry['teacher']}")
+                
+                # Video link
+                if entry['video_url']:
+                    lines.append(f"🎥 VIDEO ({preferred_quality.upper()}): {entry['video_url']}")
+                
+                # PDF link
+                if entry['pdf_url']:
+                    lines.append(f"📄 PDF: {entry['pdf_name']}")
+                    lines.append(f"   📎 {entry['pdf_url']}")
+                else:
+                    lines.append("📄 PDF: Not Available")
+                
                 lines.append("-" * 40)
-                
-                practice_sheets = practice_topic['pdfs']
-                
-                for i, sheet in enumerate(practice_sheets, 1):
-                    sheet_name = sheet.get('name', f'Practice Sheet {i}')
-                    sheet_url = sheet.get('url', '')
-                    
-                    if sheet_url:
-                        lines.append(f"{i}. {sheet_name}")
-                        lines.append(f"   📎 {sheet_url}")
-                        lines.append("")
-                
-                lines.append("")
-            
-            # If no content for this topic
-            if (not video_topic or not video_topic.get('classes')) and \
-               (not practice_topic or not practice_topic.get('pdfs')):
-                lines.append("ℹ️ No content available for this topic yet.")
                 lines.append("")
         
-        # Footer
+        # Summary
         lines.append("")
         lines.append("=" * 80)
         lines.append("SUMMARY")
@@ -462,23 +409,20 @@ I can fetch complete course data from APIs including:
         lines.append("")
         
         # Count totals
-        total_video_classes = 0
-        total_class_pdfs = 0
-        total_practice_sheets = 0
+        total_classes = len(parsed_data['entries'])
+        total_pdfs = sum(1 for entry in parsed_data['entries'] if entry['pdf_url'])
         
-        for topic in video_topics:
-            classes = topic.get('classes', [])
-            total_video_classes += len(classes)
-            for class_item in classes:
-                total_class_pdfs += len(class_item.get('classPdf', []))
+        lines.append(f"Total Topics Covered: {len(parsed_data['topics'])}")
+        lines.append(f"Total Video Classes: {total_classes}")
+        lines.append(f"Total Class PDFs: {total_pdfs}")
+        lines.append("")
         
-        for topic in practice_topics:
-            total_practice_sheets += len(topic.get('pdfs', []))
+        # List all topics
+        lines.append("Topics Covered:")
+        for i, topic in enumerate(sorted(parsed_data['topics']), 1):
+            topic_class_count = sum(1 for entry in parsed_data['entries'] if entry['topic'] == topic)
+            lines.append(f"{i}. {topic} ({topic_class_count} classes)")
         
-        lines.append(f"Total Topics Covered: {len(all_topic_ids)}")
-        lines.append(f"Total Video Classes: {total_video_classes}")
-        lines.append(f"Total Class PDFs: {total_class_pdfs}")
-        lines.append(f"Total Practice Sheets: {total_practice_sheets}")
         lines.append("")
         lines.append(f"Video Quality Used: {preferred_quality.upper()}")
         lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -501,14 +445,7 @@ I can fetch complete course data from APIs including:
         
         keyboard = [
             [
-                InlineKeyboardButton("240p (Mobile Data)", callback_data="quality_240p"),
-                InlineKeyboardButton("360p (Standard)", callback_data="quality_360p"),
-            ],
-            [
-                InlineKeyboardButton("480p (Good Quality)", callback_data="quality_480p"),
                 InlineKeyboardButton("720p (HD - Recommended)", callback_data="quality_720p"),
-            ],
-            [
                 InlineKeyboardButton("1080p (Full HD)", callback_data="quality_1080p"),
             ]
         ]
@@ -520,11 +457,8 @@ I can fetch complete course data from APIs including:
         await update.message.reply_text(
             f"🎥 **Select your preferred video quality:**\n\n"
             f"**Current:** {current_quality.upper()}\n\n"
-            f"This quality will be prioritized when multiple options are available.\n\n"
-            f"**Recommendations:**\n"
-            f"• 720p - Best balance of quality and file size\n"
-            f"• 480p - Good for slower connections\n"
-            f"• 1080p - Best quality if available",
+            f"This quality will be shown in the generated file.\n\n"
+            f"**Note:** Most videos in the course are 720p.",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -555,13 +489,12 @@ I can fetch complete course data from APIs including:
                     
                     await query.edit_message_text(
                         f"✅ **Course Selected:** {course['title']}\n\n"
-                        f"📖 Description: {course.get('description', 'Complete course with videos and practice materials')}\n\n"
+                        f"📖 Description: {course.get('description', 'Complete course with videos and materials')}\n\n"
                         f"Now use `/get_course` to generate the complete data file.\n\n"
                         f"The file will include:\n"
                         f"• Video lecture links\n"
                         f"• Class PDF materials\n"
-                        f"• Practice sheets\n"
-                        f"• Organized by topics",
+                        f"• Organized by topics and classes",
                         parse_mode='Markdown'
                     )
                 else:
@@ -584,9 +517,6 @@ I can fetch complete course data from APIs including:
                 self.user_sessions[user_id]['preferred_quality'] = quality
             
             quality_descriptions = {
-                '240p': 'Mobile Data - Lowest quality',
-                '360p': 'Standard - Good for basic viewing',
-                '480p': 'Good Quality - Balanced option',
                 '720p': 'HD - Recommended for most users',
                 '1080p': 'Full HD - Best quality if available'
             }
@@ -596,7 +526,7 @@ I can fetch complete course data from APIs including:
             await query.edit_message_text(
                 f"✅ **Video quality set to:** {quality.upper()}\n\n"
                 f"{description}\n\n"
-                f"This setting will be used for all future course file generations.\n\n"
+                f"This setting will be used in all generated course files.\n\n"
                 f"You can change it anytime using `/quality`",
                 parse_mode='Markdown'
             )
