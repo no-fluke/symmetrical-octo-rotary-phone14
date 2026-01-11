@@ -1,24 +1,30 @@
 import os
 import logging
+import json
 import requests
+import asyncio
+import threading
+import time
 from datetime import datetime
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import tempfile
+from urllib.parse import urlparse
 
-# Get port from environment variable (Render provides this)
-port = int(os.environ.get('PORT', 5000))
-
-# Initialize Flask app
+# Initialize Flask app for keeping Render awake
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🤖 Telegram Course Bot is running!"
+    return "🤖 Course Data Bot is running!"
 
 @app.route('/health')
 def health():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+def run_flask():
+    app.run(host='0.0.0.0', port=5000)
 
 # Configure logging
 logging.basicConfig(
@@ -27,428 +33,307 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class CourseBot:
-    def __init__(self, token: str):
+class CourseDataBot:
+    def __init__(self, token):
         self.token = token
         self.application = Application.builder().token(token).build()
-        self.api_base_url = "https://backend.multistreaming.site/api"
-        self.user_preferences = {}
-        self.available_courses = []
         self.setup_handlers()
         
     def setup_handlers(self):
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("batches", self.batches_command))
-        self.application.add_handler(CommandHandler("get_course", self.get_course_command))
-        self.application.add_handler(CommandHandler("quality", self.quality_command))
-        self.application.add_handler(CallbackQueryHandler(self.quality_callback, pattern="^quality_"))
-        self.application.add_handler(CallbackQueryHandler(self.course_callback, pattern="^course_"))
+        self.application.add_handler(CommandHandler("getcourse", self.get_course_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if user_id not in self.user_preferences:
-            self.user_preferences[user_id] = "720p"
-        
-        welcome_text = f"""🤖 Course Data Bot
+        welcome_text = """
+🤖 **Course Data Extractor Bot**
 
-I can fetch course data from the API and send you formatted text files containing:
+I can fetch course data from APIs and organize it for you!
 
-• Topics and classes
-• Video lecture links (your chosen quality)
-• PDF material links
-• Teacher information
+**Commands:**
+/start - Show this message
+/help - Get help information
+/getcourse - Fetch course data from API
 
-Your current video quality preference: {self.user_preferences[user_id]}
-
-Commands:
-/start - Show this message  
-/help - Get help information  
-/batches - Show all available batches
-/quality - Change video quality preference  
-/get_course - Fetch course data from API and get a text file"""
-        await update.message.reply_text(welcome_text)
+**Features:**
+- Fetches course data from API endpoints
+- Extracts PDF links and video links
+- Organizes by topics and classes
+- Creates structured text files
+        """
+        await update.message.reply_text(welcome_text, parse_mode='Markdown')
         
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        help_text = """📖 Help Guide
+        help_text = """
+📖 **Help Guide**
 
-/batches
-- Shows all available courses/batches
-- Select a batch to get its data
+**How to use:**
+1. Use /getcourse to fetch default course data
+2. Or send me an API endpoint URL
+3. I'll process the data and send you a structured file
 
-/get_course
-- Fetches data from the course API
-- Generates a .txt file with:
-  • Course info
-  • Topics and classes
-  • Video links (your preferred quality)
-  • PDF links with names
+**Supported APIs:**
+- JSON APIs with course data structure
+- Should have classes organized by topics
+- Should include PDF and video links
 
-/quality
-- Change your preferred video quality
-- Available options: 240p, 360p, 480p, 720p, 1080p
-- The bot will prioritize your chosen quality
-
-The bot generates a structured text file with all the links."""
-        await update.message.reply_text(help_text)
-    
-    async def batches_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show all available batches/courses"""
-        await update.message.reply_text("📚 Fetching available batches...")
+**Output Format:**
+- Organized by topics (BIOLOGY, CHEMISTRY, PHYSICS)
+- Each class includes:
+  - Class title
+  - Video links (with quality)
+  - PDF links (with names)
+  - Teacher name
+  - Status
+        """
+        await update.message.reply_text(help_text, parse_mode='Markdown')
         
-        try:
-            # Fetch all courses from API
-            api_url = f"{self.api_base_url}/courses"
-            logger.info(f"Fetching batches from: {api_url}")
-            
-            response = requests.get(api_url, timeout=30)
-            logger.info(f"API Response Status: {response.status_code}")
-            
-            response.raise_for_status()
-            
-            data = response.json()
-            logger.info(f"API Response Data: {data}")
-            
-            if data.get('state') != 200:
-                error_msg = data.get('msg', 'Unknown error')
-                logger.error(f"API returned error state: {error_msg}")
-                await update.message.reply_text(f"❌ API Error: {error_msg}")
-                return
-            
-            courses = data.get('data', [])
-            logger.info(f"Found {len(courses)} courses")
-
-            if not courses:
-                await update.message.reply_text("❌ No batches found in the API.")
-                return
-            
-            self.available_courses = courses
-            context.user_data['available_courses'] = courses
-            
-            # Create keyboard with batches
-            keyboard = []
-            for i, course in enumerate(courses, 1):
-                course_title = course.get('title', f'Batch {i}')[:64]  # Limit title length
-                keyboard.append([InlineKeyboardButton(f"{i}. {course_title}", callback_data=f"course_{i-1}")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                f"📚 Available Batches ({len(courses)} found):\n\nClick on a batch to get its data:",
-                reply_markup=reply_markup
-            )
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error fetching batches: {e}")
-            await update.message.reply_text("❌ Network error fetching batches. Please try again later.")
-        except Exception as e:
-            logger.error(f"Unexpected error fetching batches: {e}")
-            await update.message.reply_text("❌ Error fetching batches. Please try again later.")
-    
-    async def course_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle course selection"""
-        query = update.callback_query
-        await query.answer()
-        
-        try:
-            course_index = int(query.data.replace("course_", ""))
-            courses = context.user_data.get('available_courses', [])
-            
-            if not courses or course_index >= len(courses):
-                await query.edit_message_text("❌ Course not found. Please try /batches again.")
-                return
-            
-            selected_course = courses[course_index]
-            course_id = selected_course.get('id')
-            course_title = selected_course.get('title', 'Unknown Course')
-            
-            # Store selected course ID in context for get_course_command
-            context.user_data['selected_course_id'] = course_id
-            context.user_data['selected_course_title'] = course_title
-            
-            # Automatically fetch course data and send as file
-            await query.edit_message_text(f"✅ Selected: {course_title}\n\nFetching course data...")
-            await self.fetch_and_send_course_data(update, context, course_id, course_title)
-            
-        except Exception as e:
-            logger.error(f"Error in course callback: {e}")
-            await query.edit_message_text("❌ Error selecting course. Please try again.")
-    
     async def get_course_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Fetch course data for the selected batch"""
-        user_id = update.effective_user.id
-        preferred_quality = self.user_preferences.get(user_id, "720p")
-        
-        # Check if we have a selected course
-        course_id = context.user_data.get('selected_course_id')
-        course_title = context.user_data.get('selected_course_title', 'Unknown Course')
-        
-        if not course_id:
-            await update.message.reply_text(
-                "❌ No course selected. Please use /batches to select a batch first."
-            )
-            return
-        
-        await update.message.reply_text(
-            f"📡 Fetching data for: {course_title}\n"
-            f"🎥 Using quality preference: {preferred_quality.upper()}"
-        )
-        
-        await self.fetch_and_send_course_data(update, context, course_id, course_title, preferred_quality)
-    
-    async def fetch_and_send_course_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE, course_id: str, course_title: str, preferred_quality: str = None):
-        """Fetch and process course data and send as file"""
-        if preferred_quality is None:
-            user_id = update.effective_user.id
-            preferred_quality = self.user_preferences.get(user_id, "720p")
+        await update.message.reply_text("📡 Fetching course data from API...")
         
         try:
-            api_url = f"{self.api_base_url}/courses/{course_id}/classes?populate=full"
-            logger.info(f"Fetching course data from: {api_url}")
+            # Default API endpoint
+            api_url = "https://backend.multistreaming.site/api/courses/68e7b6e6aaf4383d1192dfb6/classes?populate=full"
             
-            response = requests.get(api_url, timeout=30)
-            logger.info(f"Course API Response Status: {response.status_code}")
+            # Create the text file
+            txt_content = await self.fetch_and_process_course_data(api_url)
             
+            if txt_content:
+                # Create a temporary file
+                temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
+                temp_file.write(txt_content)
+                temp_file.close()
+                
+                # Send the file
+                with open(temp_file.name, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=update.message.chat_id,
+                        document=f,
+                        filename="course_data.txt",
+                        caption="✅ Course data extracted successfully!"
+                    )
+                
+                # Clean up
+                os.unlink(temp_file.name)
+                await update.message.reply_text("✅ File sent successfully!")
+            else:
+                await update.message.reply_text("❌ Failed to fetch or process course data.")
+                
+        except Exception as e:
+            logger.error(f"Error in get_course_command: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+    
+    async def fetch_and_process_course_data(self, api_url: str):
+        try:
+            # Fetch data from API
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(api_url, headers=headers, timeout=30)
             response.raise_for_status()
             
             data = response.json()
-            logger.info(f"Course API Response Keys: {list(data.keys())}")
             
-            # Check if API returned success
-            if data.get('state') != 200:
-                error_msg = data.get('msg', 'Unknown error')
-                logger.error(f"Course API returned error: {error_msg}")
-                await update.effective_message.reply_text(f"❌ API Error: {error_msg}")
-                return
+            # Start building the text content
+            txt_content = f"Course Data Extracted on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            txt_content += f"API Source: {api_url}\n"
+            txt_content += "="*80 + "\n\n"
             
             # Check if data structure is as expected
-            if 'data' not in data:
-                logger.error(f"Unexpected data structure: {data}")
-                await update.effective_message.reply_text("❌ Unexpected data format from API.")
-                return
-            
-            course_info = data['data'].get('course', {})
-            classes_data = data['data'].get('classes', [])
-            
-            logger.info(f"Found {len(classes_data)} topics in course")
-            
-            if not classes_data:
-                await update.effective_message.reply_text("❌ No class data found for this course.")
-                return
-            
-            text_content = self.generate_formatted_text_file(course_info, classes_data, preferred_quality)
-            
-            # Remove numbering/timestamp from filename - just use course title
-            filename = f"{course_title.replace(' ', '_')}.txt"
-            
-            # Send as text file
-            await update.effective_message.reply_document(
-                document=text_content.encode('utf-8'),
-                filename=filename,
-                caption=(
-                    f"📚 Course Data: {course_title}\n"
-                    f"🎥 Quality Preference: {preferred_quality.upper()}\n"
-                    f"📅 Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-            )
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error fetching course data: {e}")
-            await update.effective_message.reply_text("❌ Network error fetching course data. Please try again later.")
-        except ValueError as e:
-            logger.error(f"JSON parsing error: {e}")
-            await update.effective_message.reply_text("❌ Data format error from API. Please try again later.")
+            if 'data' in data and 'classes' in data['data']:
+                topics = data['data']['classes']
+                
+                for topic in topics:
+                    topic_name = topic.get('topicName', 'Unknown Topic')
+                    topic_id = topic.get('topicId', '')
+                    classes = topic.get('classes', [])
+                    
+                    txt_content += f"TOPIC: {topic_name} (ID: {topic_id})\n"
+                    txt_content += "-"*60 + "\n\n"
+                    
+                    for class_item in classes:
+                        # Basic class info
+                        title = class_item.get('title', 'No Title')
+                        class_id = class_item.get('classId', '')
+                        teacher = class_item.get('teacherName', 'Unknown Teacher')
+                        is_free = class_item.get('isFree', False)
+                        status = class_item.get('status', 'unknown')
+                        
+                        txt_content += f"CLASS: {title}\n"
+                        txt_content += f"ID: {class_id}\n"
+                        txt_content += f"Teacher: {teacher}\n"
+                        txt_content += f"Status: {status} | Free: {'Yes' if is_free else 'No'}\n"
+                        txt_content += f"Priority: {class_item.get('priority', 'N/A')}\n"
+                        
+                        # Video links
+                        mp4_recordings = class_item.get('mp4Recordings', [])
+                        class_link = class_item.get('class_link', '')
+                        
+                        txt_content += "\n📹 VIDEO LECTURES:\n"
+                        if class_link:
+                            txt_content += f"  • Class Link: {class_link}\n"
+                        
+                        if mp4_recordings:
+                            for video in mp4_recordings:
+                                quality = video.get('quality', 'Unknown')
+                                size = video.get('size', 0)
+                                url = video.get('url', '')
+                                if url:
+                                    txt_content += f"  • {quality} ({size} MB): {url}\n"
+                        else:
+                            txt_content += "  • No video recordings available\n"
+                        
+                        # PDF links
+                        class_pdfs = class_item.get('classPdf', [])
+                        
+                        txt_content += "\n📚 PDF & PRACTICE SHEETS:\n"
+                        if class_pdfs:
+                            for pdf in class_pdfs:
+                                name = pdf.get('name', 'Unnamed PDF')
+                                url = pdf.get('url', '')
+                                priority = pdf.get('priority', 1)
+                                if url:
+                                    txt_content += f"  • PDF {priority}: {name}\n"
+                                    txt_content += f"    URL: {url}\n"
+                        else:
+                            txt_content += "  • No PDFs available\n"
+                        
+                        # Practice tests (if available)
+                        class_tests = class_item.get('classTest', [])
+                        if class_tests:
+                            txt_content += "\n📝 PRACTICE TESTS:\n"
+                            for test in class_tests:
+                                test_name = test.get('name', 'Practice Test')
+                                test_url = test.get('url', '')
+                                if test_url:
+                                    txt_content += f"  • {test_name}: {test_url}\n"
+                        
+                        txt_content += "\n" + "="*60 + "\n\n"
+                    
+                    txt_content += "\n" + "="*80 + "\n\n"
+                
+                return txt_content
+            else:
+                # Try alternative structure
+                txt_content = await self.process_alternative_structure(data)
+                return txt_content
+                
         except Exception as e:
-            logger.error(f"Unexpected error in fetch_course_data: {e}")
-            await update.effective_message.reply_text("❌ Error fetching course data. Please try again later.")
+            logger.error(f"Error processing API data: {e}")
+            return f"Error processing API data: {str(e)}"
     
-    def get_preferred_video_url(self, class_data, preferred_quality):
-        """Get only the preferred quality video URL"""
-        mp4_recordings = class_data.get('mp4Recordings', [])
+    async def process_alternative_structure(self, data):
+        """Process alternative data structures"""
+        txt_content = "Alternative Data Structure Found\n"
+        txt_content += "="*80 + "\n\n"
         
-        # If no recordings, try class_link
-        if not mp4_recordings:
-            class_link = class_data.get('class_link')
-            if class_link and class_link.startswith(('http://', 'https://')):
-                return class_link
-            return None
+        # Try to extract any useful information
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key == 'classes' and isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict):
+                            title = item.get('title', '')
+                            pdfs = item.get('classPdf', [])
+                            videos = item.get('mp4Recordings', [])
+                            
+                            if title:
+                                txt_content += f"CLASS: {title}\n"
+                            
+                            if pdfs:
+                                txt_content += "PDFs:\n"
+                                for pdf in pdfs:
+                                    if isinstance(pdf, dict):
+                                        name = pdf.get('name', 'PDF')
+                                        url = pdf.get('url', '')
+                                        if url:
+                                            txt_content += f"  • {name}: {url}\n"
+                            
+                            if videos:
+                                txt_content += "Videos:\n"
+                                for video in videos:
+                                    if isinstance(video, dict):
+                                        url = video.get('url', '')
+                                        quality = video.get('quality', '')
+                                        if url:
+                                            txt_content += f"  • {quality}: {url}\n"
+                            
+                            txt_content += "\n" + "-"*40 + "\n\n"
         
-        # Look for exact quality match first
-        for recording in mp4_recordings:
-            quality = recording.get('quality', '').lower()
-            if quality == preferred_quality.lower():
-                return recording.get('url')
-        
-        # If exact match not found, look for closest quality
-        quality_priority = ['1080p', '720p', '480p', '360p', '240p']
-        if preferred_quality.lower() in quality_priority:
-            pref_index = quality_priority.index(preferred_quality.lower())
-            for i in range(pref_index, len(quality_priority)):
-                for recording in mp4_recordings:
-                    if recording.get('quality', '').lower() == quality_priority[i]:
-                        return recording.get('url')
-        
-        # If still not found, return the first available recording
-        if mp4_recordings:
-            return mp4_recordings[0].get('url')
-        
-        # Fallback to class_link
-        class_link = class_data.get('class_link')
-        if class_link and class_link.startswith(('http://', 'https://')):
-            return class_link
-        
-        return None
-    
-    def generate_formatted_text_file(self, course_info, classes_data, preferred_quality):
-        """Generate text file with proper arrangement of videos and PDFs by topic"""
-        import re
-        lines = []
-        
-        # First, collect all video classes and their PDFs
-        all_classes = []
-        
-        for topic in classes_data:
-            topic_name = topic.get('topicName', 'Unknown Topic')
-            topic_classes = topic.get('classes', [])
-            
-            for class_data in topic_classes:
-                class_title = class_data.get('title', '')
-                teacher_name = class_data.get('teacherName', 'Unknown Teacher')
-                
-                # Extract class number from title
-                class_number = "01"
-                if class_title:
-                    match = re.search(r'(\d+)', class_title)
-                    if match:
-                        class_number = match.group(1).zfill(2)
-                
-                # Get video URL
-                video_url = self.get_preferred_video_url(class_data, preferred_quality)
-                
-                # Get PDFs for this class
-                pdfs = []
-                class_pdfs = class_data.get('classPdf', [])
-                for pdf in class_pdfs:
-                    pdf_url = pdf.get('url')
-                    pdf_name = pdf.get('name', 'Unknown PDF')
-                    if pdf_url and pdf_url.startswith(('http://', 'https://')):
-                        pdfs.append({
-                            'name': pdf_name,
-                            'url': pdf_url,
-                            'teacher': teacher_name
-                        })
-                
-                if video_url:
-                    all_classes.append({
-                        'class_number': class_number,
-                        'class_title': class_title,
-                        'teacher_name': teacher_name,
-                        'topic_name': topic_name,
-                        'video_url': video_url,
-                        'pdfs': pdfs
-                    })
-        
-        # Sort classes by topic and then by class number
-        all_classes.sort(key=lambda x: (x['topic_name'], x['class_number']))
-        
-        # Group by topic
-        current_topic = None
-        
-        for class_info in all_classes:
-            # Add topic header if it's a new topic
-            if class_info['topic_name'] != current_topic:
-                if current_topic is not None:
-                    lines.append("")  # Empty line between topics
-                current_topic = class_info['topic_name']
-                # You can uncomment the next line if you want topic headers
-                # lines.append(f"=== {current_topic.upper()} ===")
-            
-            # Add video line
-            video_line = f"Class-{class_info['class_number']} || {class_info['class_title']} | {class_info['teacher_name']} | {class_info['topic_name']} | ({class_info['teacher_name'].upper()}): {class_info['video_url']}"
-            lines.append(video_line)
-            
-            # Add PDFs for this class
-            for pdf in class_info['pdfs']:
-                pdf_line = f"{pdf['name']} ({pdf['teacher'].upper()}): {pdf['url']}"
-                lines.append(pdf_line)
-            
-            lines.append("")  # Empty line between classes
-        
-        return '\n'.join(lines)
-    
-    async def quality_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        keyboard = [
-            [
-                InlineKeyboardButton("240p", callback_data="quality_240p"),
-                InlineKeyboardButton("360p", callback_data="quality_360p"),
-                InlineKeyboardButton("480p", callback_data="quality_480p"),
-            ],
-            [
-                InlineKeyboardButton("720p", callback_data="quality_720p"),
-                InlineKeyboardButton("1080p", callback_data="quality_1080p"),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            "🎥 Select your preferred video quality:",
-            reply_markup=reply_markup
-        )
-    
-    async def quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        quality = query.data.replace("quality_", "")
-        
-        self.user_preferences[user_id] = quality
-        await query.edit_message_text(
-            f"✅ Video quality preference set to: {quality.upper()}"
-        )
+        return txt_content if len(txt_content) > 100 else "No valid course data found in the API response."
     
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        current_quality = self.user_preferences.get(user_id, "720p")
+        text = update.message.text
         
-        await update.message.reply_text(
-            f"👋 Available commands:\n\n"
-            f"/start - Show welcome message\n"
-            f"/help - Help & usage\n"
-            f"/batches - Show all available batches\n"
-            f"/quality - Change video quality (Current: {current_quality.upper()})\n"
-            f"/get_course - Fetch data for selected batch"
-        )
+        # Check if it's a URL
+        if text.startswith(('http://', 'https://')):
+            await update.message.reply_text("🔗 Processing your API URL...")
+            
+            try:
+                txt_content = await self.fetch_and_process_course_data(text)
+                
+                if txt_content:
+                    # Create a temporary file
+                    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
+                    temp_file.write(txt_content)
+                    temp_file.close()
+                    
+                    # Send the file
+                    with open(temp_file.name, 'rb') as f:
+                        await context.bot.send_document(
+                            chat_id=update.message.chat_id,
+                            document=f,
+                            filename="api_data.txt",
+                            caption=f"✅ Data extracted from: {text}"
+                        )
+                    
+                    # Clean up
+                    os.unlink(temp_file.name)
+                    await update.message.reply_text("✅ File sent successfully!")
+                else:
+                    await update.message.reply_text("❌ Failed to process the API URL.")
+                    
+            except Exception as e:
+                logger.error(f"Error processing URL: {e}")
+                await update.message.reply_text(f"❌ Error processing URL: {str(e)}")
+        else:
+            await update.message.reply_text(
+                "Please send me an API URL or use /getcourse to fetch default course data.\n"
+                "Example API URL: https://backend.multistreaming.site/api/courses/68e7b6e6aaf4383d1192dfb6/classes?populate=full\n\n"
+                "Use /help for more information."
+            )
 
-def run_flask():
-    app.run(host='0.0.0.0', port=port)
+# Keep-alive mechanism for Render
+def keep_alive():
+    def ping_server():
+        while True:
+            try:
+                logger.info("Bot is alive and running...")
+                time.sleep(300)  # Ping every 5 minutes
+            except Exception as e:
+                logger.error(f"Keep-alive error: {e}")
+                
+    thread = threading.Thread(target=ping_server, daemon=True)
+    thread.start()
 
 def main():
-    token = os.getenv('TELEGRAM_BOT_TOKEN') or os.getenv('BOT_TOKEN')
-    
+    token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
-        logger.error("❌ TELEGRAM_BOT_TOKEN environment variable is required")
-        logger.error("Please set TELEGRAM_BOT_TOKEN in your Render environment variables")
-        return
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
     
-    logger.info("✅ Bot token found, starting bot...")
+    # Start Flask server in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
     
-    try:
-        # Start Flask in a separate thread
-        import threading
-        flask_thread = threading.Thread(target=run_flask, daemon=True)
-        flask_thread.start()
-        
-        logger.info(f"🌐 Flask server started on port {port}")
-        
-        # Start the bot
-        bot = CourseBot(token)
-        logger.info("🤖 Bot is starting...")
-        bot.application.run_polling(allowed_updates=Update.ALL_TYPES)
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to start bot: {e}")
+    # Start keep-alive mechanism
+    keep_alive()
+    
+    # Initialize and start bot
+    bot = CourseDataBot(token)
+    
+    logger.info("Course Data Bot is starting...")
+    bot.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
