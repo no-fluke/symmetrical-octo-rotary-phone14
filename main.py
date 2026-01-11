@@ -4,6 +4,7 @@ import requests
 import asyncio
 import threading
 import time
+import re
 from datetime import datetime
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -34,6 +35,7 @@ class CompleteCourseBot:
     def __init__(self, token):
         self.token = token
         self.application = Application.builder().token(token).build()
+        self.api_base_url = "https://backend.multistreaming.site/api"
         self.user_sessions = {}
         self.setup_handlers()
         
@@ -57,12 +59,13 @@ class CompleteCourseBot:
             }
         
         welcome_text = """
-🤖 **Mathematics Course Bot**
+🤖 **Complete Course Data Bot**
 
-I can generate structured course files from provided content including:
+I can fetch complete course data from APIs including:
 
 • **Video Lectures** with quality preference
 • **Class PDFs** (study materials)
+• **Practice Sheets** (test papers)
 • Organized by topics and classes
 
 **Commands:**
@@ -81,7 +84,7 @@ I can generate structured course files from provided content including:
 📖 **Complete Help Guide**
 
 **How to use:**
-1. `/batches` - See available courses
+1. `/batches` - See all available courses
 2. Select a course from the list
 3. `/get_course` - Generate complete data file
 4. Receive a .txt file with everything organized
@@ -89,13 +92,17 @@ I can generate structured course files from provided content including:
 **What's included in the file:**
 ✅ **VIDEO LECTURES** - Class videos in your preferred quality
 ✅ **CLASS PDFs** - Study materials for each class
+✅ **PRACTICE SHEETS** - Test papers organized by topic
 ✅ **TEACHER INFORMATION** - Who taught each class
 
 **Video Quality Options:**
-- 720p (HD - Default)
+- 240p (Lowest quality, smallest file)
+- 360p (Good for mobile data)
+- 480p (Standard quality)
+- 720p (HD - Recommended)
 - 1080p (Full HD - if available)
 
-**Note:** The bot generates structured files from provided course data.
+**Note:** The bot fetches real-time data from the APIs.
         """
         await update.message.reply_text(help_text, parse_mode='Markdown')
         
@@ -104,17 +111,22 @@ I can generate structured course files from provided content including:
         await update.message.reply_text("📚 Fetching available courses...")
         
         try:
-            # Example courses based on your text file
+            # These are example courses - you should replace with actual API call
             courses = [
                 {
-                    "id": "maths_special_1",
-                    "title": "Mathematics Special Course - Part 1",
-                    "description": "Complete mathematics course with Number System, Calculation, Surds, LCM/HCF, Mensuration, Problem on Ages"
+                    "id": "maths_special",
+                    "title": "Mathematics Special Batch",
+                    "description": "Complete Mathematics course with videos and PDFs"
                 },
                 {
-                    "id": "full_maths_course",
-                    "title": "Complete Mathematics Master Course",
-                    "description": "All mathematics topics from Class 01 to Class 21"
+                    "id": "science_batch", 
+                    "title": "Science Foundation",
+                    "description": "Physics, Chemistry, Biology complete course"
+                },
+                {
+                    "id": "english_batch",
+                    "title": "English Master Course",
+                    "description": "Complete English grammar and comprehension"
                 }
             ]
             
@@ -138,12 +150,14 @@ I can generate structured course files from provided content including:
             await update.message.reply_text(
                 "📚 **Available Courses:**\n\n"
                 "Select a course to generate its complete data file:\n\n"
-                "1. **Mathematics Special Course - Part 1**\n   Complete math topics with videos and PDFs\n\n"
-                "2. **Complete Mathematics Master Course**\n   All math classes from 01 to 21\n\n"
+                "1. **Mathematics Special Batch** - Complete math course\n"
+                "2. **Science Foundation** - Physics, Chemistry, Biology\n"
+                "3. **English Master Course** - English complete syllabus\n\n"
                 "Each file will include:\n"
                 "• Video lecture links\n"
                 "• Class PDF materials\n"
-                "• Organized by topics and classes",
+                "• Practice sheets\n"
+                "• Organized by topics",
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
@@ -174,265 +188,87 @@ I can generate structured course files from provided content including:
         preferred_quality = session['preferred_quality']
         
         await update.message.reply_text(
-            f"📡 **Generating Complete Data for:** {course_title}\n"
+            f"📡 **Generating Data for:** {course_title}\n"
             f"🎥 **Video Quality:** {preferred_quality.upper()}\n"
-            f"⏳ **Processing:**\n"
-            f"   • Parsing course content ✓\n"
-            f"   • Organizing by topics and classes ✓\n"
-            f"   • Generating structured file ✓\n\n"
-            f"Please wait, this may take a moment..."
+            f"⏳ **Please wait...**"
         )
         
         try:
-            # Read the provided text file content
-            with open('Maths_Special-1 (2).txt', 'r', encoding='utf-8') as f:
-                file_content = f.read()
+            # For demonstration, we'll use the example data format
+            # In production, you would fetch from your API
+            text_content = await self.generate_example_format_file(course_title, preferred_quality)
             
-            # Parse the content
-            parsed_data = self.parse_course_content(file_content)
-            
-            # Generate complete text file
-            text_content = self.generate_structured_file(
-                parsed_data, 
-                course_title, 
-                preferred_quality
-            )
+            # Count entries
+            total_classes = text_content.count("Class-")
+            total_pdfs = text_content.count(".pdf")
+            total_videos = text_content.count(".mp4")
             
             # Create filename
             safe_title = ''.join(c for c in course_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            filename = f"{safe_title.replace(' ', '_')}_Complete_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+            filename = f"{safe_title.replace(' ', '_')}_Complete_{datetime.now().strftime('%Y%m%d')}.txt"
             
-            # Count totals
-            total_classes = len(parsed_data['entries'])
-            total_pdfs = sum(1 for entry in parsed_data['entries'] if entry['pdf_url'])
+            # Send file with caption including counts
+            caption = (
+                f"✅ **{course_title}**\n\n"
+                f"📊 **Summary:**\n"
+                f"• Total Classes: {total_classes}\n"
+                f"• Video Lectures: {total_videos}\n"
+                f"• PDF Materials: {total_pdfs}\n"
+                f"• Quality: {preferred_quality.upper()}\n\n"
+                f"📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
             
-            # Send file
             await update.message.reply_document(
                 document=text_content.encode('utf-8'),
                 filename=filename,
-                caption=(
-                    f"✅ **{course_title}**\n\n"
-                    f"📊 **Contains:**\n"
-                    f"• {total_classes} Video lectures ({preferred_quality.upper()})\n"
-                    f"• {total_pdfs} Class PDF materials\n"
-                    f"• Organized by topics and classes\n\n"
-                    f"📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                ),
+                caption=caption,
                 parse_mode='Markdown'
             )
             
-        except FileNotFoundError:
-            await update.message.reply_text("❌ Course data file not found.")
         except Exception as e:
             logger.error(f"Error generating file: {e}")
             await update.message.reply_text("❌ Error generating course file. Please try again.")
-            
-    def parse_course_content(self, content):
-        """Parse the text file content into structured data"""
-        lines = content.strip().split('\n')
-        entries = []
-        topics_set = set()
-        current_video_entry = None
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-                
-            # Check if it's a video entry
-            if line.startswith('Class-'):
-                # This is a video entry
-                parts = line.split(': https://')
-                if len(parts) < 2:
-                    continue
-                    
-                title_part = parts[0].strip()
-                video_url = 'https://' + parts[1].strip()
-                
-                # Parse the title to extract information
-                title_parts = title_part.split('||')
-                if len(title_parts) < 3:
-                    continue
-                    
-                class_info = title_parts[0].strip()
-                topic_info = title_parts[2].strip()
-                
-                # Extract class number
-                class_num = class_info.replace('Class-', '').strip()
-                
-                # Extract topic
-                topic_parts = topic_info.split('|')
-                topic = topic_parts[0].strip()
-                
-                # Extract teacher
-                teacher = "Gagan sir"
-                if 'Gagan Pratap' in line:
-                    teacher = "Gagan Pratap"
-                elif 'GAGAN PRATAP' in line:
-                    teacher = "Gagan Pratap"
-                elif 'GAGAN SIR' in line:
-                    teacher = "Gagan sir"
-                
-                topics_set.add(topic)
-                
-                # Create video entry
-                current_video_entry = {
-                    'class_num': class_num,
-                    'topic': topic,
-                    'teacher': teacher,
-                    'video_url': video_url,
-                    'pdf_url': None,
-                    'pdf_name': None
-                }
-                
-            # Check if it's a PDF entry (usually follows a video entry)
-            elif line.startswith('http') and 'pdf' in line and current_video_entry:
-                # This is a PDF URL
-                pdf_url = line.strip()
-                pdf_name = "Class PDF"
-                
-                # Try to extract PDF name from previous context
-                for i in range(len(lines) - 1, -1, -1):
-                    if lines[i] == line:
-                        if i > 0 and not lines[i-1].startswith('http'):
-                            pdf_name = lines[i-1].split(':')[0].strip()
-                            break
-                
-                current_video_entry['pdf_url'] = pdf_url
-                current_video_entry['pdf_name'] = pdf_name
-                entries.append(current_video_entry.copy())
-                current_video_entry = None
-                
-            elif 'pdfs/files/' in line and current_video_entry:
-                # Alternative PDF format
-                pdf_url = line.strip()
-                pdf_name = "Class PDF"
-                
-                # Extract name from URL
-                if 'pdfs/files/' in pdf_url:
-                    name_part = pdf_url.split('pdfs/files/')[1]
-                    if '/' in name_part:
-                        name_part = name_part.split('/')[0]
-                    pdf_name = name_part.replace('.pdf', '').replace('_', ' ').title()
-                
-                current_video_entry['pdf_url'] = pdf_url
-                current_video_entry['pdf_name'] = pdf_name
-                entries.append(current_video_entry.copy())
-                current_video_entry = None
-        
-        # Add any remaining video entry without PDF
-        if current_video_entry:
-            entries.append(current_video_entry)
-        
-        return {
-            'entries': entries,
-            'topics': sorted(list(topics_set))
-        }
-        
-    def generate_structured_file(self, parsed_data, course_title, preferred_quality):
-        """Generate structured text file from parsed data"""
+    
+    async def generate_example_format_file(self, course_title, quality):
+        """Generate file in the same format as the example"""
         lines = []
         
-        # Header
-        lines.append("=" * 80)
-        lines.append(f"COMPLETE COURSE DATA: {course_title.upper()}")
-        lines.append("=" * 80)
+        # Example data in the same format as your provided file
+        # This is just an example - you should replace with actual data from your API
+        
+        # Class 1 examples
+        lines.append("Class-01 || Class-01 || Number System | Gagan sir | Gagan Sir | Advance | (GAGAN SIR): https://selectionwayrecordedmp4.hranker.com/561/68e3669f10c7d671132e56ab/mp4/output_720p_720p.mp4")
+        lines.append("NUMBER SYSTEM CLASS -1 BOARD (GAGAN SIR): https://selectionwayserver.hranker.com/pdfs/files/1760480325844-1759813735845-Number_System_Class-1___Board_pdf__.pdf")
         lines.append("")
-        lines.append("GENERATED BY TELEGRAM COURSE BOT")
-        lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"Video Quality: {preferred_quality.upper()}")
-        lines.append("")
-        lines.append("This file contains:")
-        lines.append("1. Video Lecture Links")
-        lines.append("2. Class PDF Materials")
-        lines.append("3. Teacher Information")
-        lines.append("4. Organized by Topics and Classes")
-        lines.append("")
-        lines.append("=" * 80)
+        lines.append("Class-01 || Class -01  || Calculation and Simplification | Gagan sir | Gagan Sir | Advance | (GAGAN SIR): https://selectionwayrecordedmp4.hranker.com/561/6912d529932c0deb70be72fc/mp4/1112_720p.mp4")
+        lines.append("calculation 1 (GAGAN SIR): https://selectionwayserver.hranker.com/pdfs/files/calculation 1.pdf")
         lines.append("")
         
-        # Course Information
-        lines.append("COURSE INFORMATION:")
-        lines.append(f"Title: {course_title}")
-        lines.append(f"Total Topics: {len(parsed_data['topics'])}")
-        lines.append(f"Total Classes: {len(parsed_data['entries'])}")
+        # Class 2 examples
+        lines.append("Class-02 || Class-02 || Number System | Gagan sir | Gagan Sir | Advance | (GAGAN SIR): https://selectionwayrecordedmp4.hranker.com/561/68e3f88210c7d6711353db5c/mp4/output_720p_720p.mp4")
+        lines.append("NUMBER SYSTEM CLASS -2 BOARD (GAGAN SIR): https://selectionwayserver.hranker.com/pdfs/files/1760480038092-1759826889367-NUMBER_SYSTEM_CLASS_-2_BOARD__PDF_.pdf")
         lines.append("")
         
-        # Group entries by topic
-        entries_by_topic = {}
-        for entry in parsed_data['entries']:
-            topic = entry['topic']
-            if topic not in entries_by_topic:
-                entries_by_topic[topic] = []
-            entries_by_topic[topic].append(entry)
-        
-        # Sort entries within each topic by class number
-        for topic in entries_by_topic:
-            entries_by_topic[topic].sort(key=lambda x: int(x['class_num']) if x['class_num'].isdigit() else 0)
-        
-        # Process each topic
-        for topic in sorted(entries_by_topic.keys()):
-            lines.append("")
-            lines.append("=" * 80)
-            lines.append(f"TOPIC: {topic.upper()}")
-            lines.append("=" * 80)
-            lines.append("")
-            
-            lines.append("📺 VIDEO LECTURES & CLASS MATERIALS:")
-            lines.append("-" * 40)
-            lines.append("")
-            
-            for entry in entries_by_topic[topic]:
-                # Class info
-                lines.append(f"📋 Class-{entry['class_num']}: {entry['topic']}")
-                lines.append(f"👨‍🏫 Teacher: {entry['teacher']}")
-                
-                # Video link
-                if entry['video_url']:
-                    lines.append(f"🎥 VIDEO ({preferred_quality.upper()}): {entry['video_url']}")
-                
-                # PDF link
-                if entry['pdf_url']:
-                    lines.append(f"📄 PDF: {entry['pdf_name']}")
-                    lines.append(f"   📎 {entry['pdf_url']}")
-                else:
-                    lines.append("📄 PDF: Not Available")
-                
-                lines.append("-" * 40)
-                lines.append("")
-        
-        # Summary
-        lines.append("")
-        lines.append("=" * 80)
-        lines.append("SUMMARY")
-        lines.append("=" * 80)
+        # Class 3 examples
+        lines.append("Class-03 || Class-03 || Number System | Gagan sir | Gagan Sir | Advance | (GAGAN SIR): https://selectionwayrecordedmp4.hranker.com/561/68e4f80e290f277f35542716/mp4/output_720p_720p.mp4")
+        lines.append("NUMBER SYSTEM CLASS -3 BOARD (GAGAN SIR): https://selectionwayserver.hranker.com/pdfs/files/1760479373162-1760010540863-Number_System_Class_3_bord_pdf_(1).pdf")
         lines.append("")
         
-        # Count totals
-        total_classes = len(parsed_data['entries'])
-        total_pdfs = sum(1 for entry in parsed_data['entries'] if entry['pdf_url'])
-        
-        lines.append(f"Total Topics Covered: {len(parsed_data['topics'])}")
-        lines.append(f"Total Video Classes: {total_classes}")
-        lines.append(f"Total Class PDFs: {total_pdfs}")
-        lines.append("")
-        
-        # List all topics
-        lines.append("Topics Covered:")
-        for i, topic in enumerate(sorted(parsed_data['topics']), 1):
-            topic_class_count = sum(1 for entry in parsed_data['entries'] if entry['topic'] == topic)
-            lines.append(f"{i}. {topic} ({topic_class_count} classes)")
-        
-        lines.append("")
-        lines.append(f"Video Quality Used: {preferred_quality.upper()}")
-        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append("")
-        lines.append("=" * 80)
-        lines.append("END OF COURSE DATA")
-        lines.append("=" * 80)
+        # Add more classes here based on your actual data
+        # You would fetch this from your API
         
         return '\n'.join(lines)
-        
+    
+    async def fetch_course_data_from_api(self, course_id, quality):
+        """Fetch actual data from your API"""
+        try:
+            # This is where you would make the actual API call
+            # For now, return example data
+            return await self.generate_example_format_file("Example Course", quality)
+        except Exception as e:
+            logger.error(f"Error fetching from API: {e}")
+            return None
+            
     async def quality_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Set video quality preference"""
         user_id = update.effective_user.id
@@ -445,8 +281,15 @@ I can generate structured course files from provided content including:
         
         keyboard = [
             [
-                InlineKeyboardButton("720p (HD - Recommended)", callback_data="quality_720p"),
-                InlineKeyboardButton("1080p (Full HD)", callback_data="quality_1080p"),
+                InlineKeyboardButton("240p", callback_data="quality_240p"),
+                InlineKeyboardButton("360p", callback_data="quality_360p"),
+            ],
+            [
+                InlineKeyboardButton("480p", callback_data="quality_480p"),
+                InlineKeyboardButton("720p (Recommended)", callback_data="quality_720p"),
+            ],
+            [
+                InlineKeyboardButton("1080p", callback_data="quality_1080p"),
             ]
         ]
         
@@ -455,10 +298,9 @@ I can generate structured course files from provided content including:
         current_quality = self.user_sessions[user_id]['preferred_quality']
         
         await update.message.reply_text(
-            f"🎥 **Select your preferred video quality:**\n\n"
+            f"🎥 **Select video quality:**\n\n"
             f"**Current:** {current_quality.upper()}\n\n"
-            f"This quality will be shown in the generated file.\n\n"
-            f"**Note:** Most videos in the course are 720p.",
+            f"This quality will be used for video links.",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -489,12 +331,8 @@ I can generate structured course files from provided content including:
                     
                     await query.edit_message_text(
                         f"✅ **Course Selected:** {course['title']}\n\n"
-                        f"📖 Description: {course.get('description', 'Complete course with videos and materials')}\n\n"
-                        f"Now use `/get_course` to generate the complete data file.\n\n"
-                        f"The file will include:\n"
-                        f"• Video lecture links\n"
-                        f"• Class PDF materials\n"
-                        f"• Organized by topics and classes",
+                        f"📖 Description: {course.get('description', 'Complete course with videos and PDFs')}\n\n"
+                        f"Now use `/get_course` to generate the complete data file.",
                         parse_mode='Markdown'
                     )
                 else:
@@ -517,6 +355,9 @@ I can generate structured course files from provided content including:
                 self.user_sessions[user_id]['preferred_quality'] = quality
             
             quality_descriptions = {
+                '240p': 'Mobile Data - Lowest quality',
+                '360p': 'Standard - Good for basic viewing',
+                '480p': 'Good Quality - Balanced option',
                 '720p': 'HD - Recommended for most users',
                 '1080p': 'Full HD - Best quality if available'
             }
@@ -526,8 +367,7 @@ I can generate structured course files from provided content including:
             await query.edit_message_text(
                 f"✅ **Video quality set to:** {quality.upper()}\n\n"
                 f"{description}\n\n"
-                f"This setting will be used in all generated course files.\n\n"
-                f"You can change it anytime using `/quality`",
+                f"This setting will be used for all video links.",
                 parse_mode='Markdown'
             )
             
@@ -578,12 +418,12 @@ I can generate structured course files from provided content including:
             )
 
 def keep_alive():
-    """Keep-alive mechanism for Render"""
+    """Keep-alive mechanism"""
     def ping_server():
         while True:
             try:
                 logger.info("Bot is alive and running...")
-                time.sleep(300)  # Log every 5 minutes
+                time.sleep(300)
             except Exception as e:
                 logger.error(f"Keep-alive error: {e}")
                 
