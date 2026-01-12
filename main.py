@@ -42,10 +42,8 @@ class CourseBot:
         self.application.add_handler(CommandHandler("batches", self.batches_command))
         self.application.add_handler(CommandHandler("get_course", self.get_course_command))
         self.application.add_handler(CommandHandler("quality", self.quality_command))
-        self.application.add_handler(CommandHandler("sheets", self.sheets_command))
         self.application.add_handler(CallbackQueryHandler(self.quality_callback, pattern="^quality_"))
         self.application.add_handler(CallbackQueryHandler(self.course_callback, pattern="^course_"))
-        self.application.add_handler(CallbackQueryHandler(self.sheets_callback, pattern="^sheets_"))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,7 +58,7 @@ I can fetch course data from the API and send you formatted text files containin
 • Topics and classes
 • Video lecture links (your chosen quality)
 • PDF material links
-• Practice sheets/PDFs
+• Practice sheets with links
 • Teacher information
 
 Your current video quality preference: {self.user_preferences[user_id]}
@@ -70,8 +68,7 @@ Commands:
 /help - Get help information  
 /batches - Show all available batches
 /quality - Change video quality preference  
-/get_course - Fetch course data from API and get a text file
-/sheets - Get practice sheets separately"""
+/get_course - Fetch course data from API and get a text file"""
         await update.message.reply_text(welcome_text)
         
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,12 +84,8 @@ Commands:
   • Course info
   • Topics and classes
   • Video links (your preferred quality)
-  • PDF links with names
-  • Practice sheets (if available)
-
-/sheets
-- Get practice sheets separately as a text file
-- Shows available topics for practice sheets
+  • Class PDF links with names
+  • Practice sheets PDF links
 
 /quality
 - Change your preferred video quality
@@ -213,7 +206,7 @@ The bot generates a structured text file with all the links."""
             preferred_quality = self.user_preferences.get(user_id, "720p")
         
         try:
-            # Fetch course classes data
+            # Fetch main course data (classes and videos)
             api_url = f"{self.api_base_url}/courses/{course_id}/classes?populate=full"
             logger.info(f"Fetching course data from: {api_url}")
             
@@ -243,28 +236,54 @@ The bot generates a structured text file with all the links."""
             
             logger.info(f"Found {len(classes_data)} topics in course")
             
-            # Fetch practice sheets
-            practice_sheets = await self.fetch_practice_sheets(course_id)
-            
-            if not classes_data and not practice_sheets:
-                await update.effective_message.reply_text("❌ No class data or practice sheets found for this course.")
+            if not classes_data:
+                await update.effective_message.reply_text("❌ No class data found for this course.")
                 return
             
-            text_content = self.generate_formatted_text_file(course_info, classes_data, preferred_quality, practice_sheets)
+            # Fetch practice sheets PDFs
+            practice_sheets = []
+            try:
+                practice_sheets_url = f"{self.api_base_url}/courses/{course_id}/pdfs?groupBy=topic"
+                logger.info(f"Fetching practice sheets from: {practice_sheets_url}")
+                
+                practice_response = requests.get(practice_sheets_url, timeout=30)
+                practice_data = practice_response.json()
+                
+                if practice_data.get('state') == 200:
+                    topics = practice_data.get('data', {}).get('topics', [])
+                    for topic in topics:
+                        pdfs = topic.get('pdfs', [])
+                        practice_sheets.extend(pdfs)
+                    
+                    logger.info(f"Found {len(practice_sheets)} practice sheets")
+                else:
+                    logger.warning(f"Practice sheets API returned error: {practice_data.get('msg')}")
+            except Exception as e:
+                logger.error(f"Error fetching practice sheets: {e}")
+                # Continue without practice sheets
             
-            # Remove numbering/timestamp from filename - just use course title
+            text_content, counts = self.generate_formatted_text_file(
+                course_info, classes_data, practice_sheets, preferred_quality
+            )
+            
+            # Create filename
             filename = f"{course_title.replace(' ', '_')}.txt"
+            
+            # Create caption with counts
+            caption = (
+                f"📚 Course Data: {course_title}\n"
+                f"🎥 Videos: {counts['video_count']}\n"
+                f"📄 Class PDFs: {counts['class_pdf_count']}\n"
+                f"📋 Practice Sheets: {counts['practice_sheet_count']}\n"
+                f"🎥 Quality Preference: {preferred_quality.upper()}\n"
+                f"📅 Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
             
             # Send as text file
             await update.effective_message.reply_document(
                 document=text_content.encode('utf-8'),
                 filename=filename,
-                caption=(
-                    f"📚 Course Data: {course_title}\n"
-                    f"🎥 Quality Preference: {preferred_quality.upper()}\n"
-                    f"📊 Practice Sheets: {len(practice_sheets.get('pdfs', [])) if practice_sheets else 0}\n"
-                    f"📅 Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
+                caption=caption
             )
             
         except requests.exceptions.RequestException as e:
@@ -276,249 +295,6 @@ The bot generates a structured text file with all the links."""
         except Exception as e:
             logger.error(f"Unexpected error in fetch_course_data: {e}")
             await update.effective_message.reply_text("❌ Error fetching course data. Please try again later.")
-    
-    async def fetch_practice_sheets(self, course_id: str):
-        """Fetch practice sheets for a course"""
-        try:
-            api_url = f"{self.api_base_url}/courses/{course_id}/pdfs?groupBy=topic"
-            logger.info(f"Fetching practice sheets from: {api_url}")
-            
-            response = requests.get(api_url, timeout=30)
-            logger.info(f"Practice Sheets API Response Status: {response.status_code}")
-            
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if data.get('state') != 200:
-                logger.warning(f"Practice sheets API returned error: {data.get('msg')}")
-                return None
-            
-            # Extract PDFs from the response
-            practice_sheets_data = data.get('data', {})
-            
-            # Flatten all PDFs from all topics into a single list
-            all_pdfs = []
-            topics = practice_sheets_data.get('topics', [])
-            
-            for topic in topics:
-                topic_name = topic.get('topicName', 'Unknown Topic')
-                pdfs = topic.get('pdfs', [])
-                
-                for pdf in pdfs:
-                    pdf['topic_name'] = topic_name
-                    all_pdfs.append(pdf)
-            
-            logger.info(f"Found {len(all_pdfs)} practice sheets")
-            
-            return {
-                'topics': topics,
-                'pdfs': all_pdfs
-            }
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error fetching practice sheets: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Error fetching practice sheets: {e}")
-            return None
-    
-    async def sheets_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get practice sheets separately"""
-        # Check if we have a selected course
-        course_id = context.user_data.get('selected_course_id')
-        course_title = context.user_data.get('selected_course_title', 'Unknown Course')
-        
-        if not course_id:
-            await update.message.reply_text(
-                "❌ No course selected. Please use /batches to select a batch first."
-            )
-            return
-        
-        await update.message.reply_text(f"📄 Fetching practice sheets for: {course_title}")
-        
-        try:
-            practice_sheets = await self.fetch_practice_sheets(course_id)
-            
-            if not practice_sheets or not practice_sheets.get('pdfs'):
-                await update.message.reply_text("❌ No practice sheets found for this course.")
-                return
-            
-            # Create keyboard with options
-            keyboard = [
-                [
-                    InlineKeyboardButton("📄 All Sheets", callback_data="sheets_all"),
-                    InlineKeyboardButton("📁 By Category", callback_data="sheets_category")
-                ],
-                [
-                    InlineKeyboardButton("🧮 Maths Only", callback_data="sheets_maths"),
-                    InlineKeyboardButton("📚 Topic-wise", callback_data="sheets_topics")
-                ]
-            ]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            total_sheets = len(practice_sheets['pdfs'])
-            categories = set()
-            for pdf in practice_sheets['pdfs']:
-                category_name = pdf.get('category', {}).get('categoryName', 'Unknown')
-                categories.add(category_name)
-            
-            await update.message.reply_text(
-                f"📊 Found {total_sheets} practice sheets\n"
-                f"📁 Categories: {', '.join(categories)}\n\n"
-                f"Select how you want to organize the sheets:",
-                reply_markup=reply_markup
-            )
-            
-            # Store practice sheets in context
-            context.user_data['practice_sheets'] = practice_sheets
-            
-        except Exception as e:
-            logger.error(f"Error in sheets command: {e}")
-            await update.message.reply_text("❌ Error fetching practice sheets. Please try again.")
-    
-    async def sheets_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle practice sheets organization choice"""
-        query = update.callback_query
-        await query.answer()
-        
-        action = query.data.replace("sheets_", "")
-        practice_sheets = context.user_data.get('practice_sheets', {})
-        course_title = context.user_data.get('selected_course_title', 'Unknown Course')
-        
-        if not practice_sheets:
-            await query.edit_message_text("❌ Practice sheets data not found. Please try /sheets again.")
-            return
-        
-        await query.edit_message_text(f"📄 Generating {action.replace('_', ' ').title()} format...")
-        
-        try:
-            if action == "all":
-                text_content = self.format_all_sheets(practice_sheets)
-            elif action == "category":
-                text_content = self.format_by_category(practice_sheets)
-            elif action == "maths":
-                text_content = self.format_maths_only(practice_sheets)
-            elif action == "topics":
-                text_content = self.format_by_topic(practice_sheets)
-            else:
-                text_content = self.format_all_sheets(practice_sheets)
-            
-            filename = f"{course_title.replace(' ', '_')}_Practice_Sheets.txt"
-            
-            await query.message.reply_document(
-                document=text_content.encode('utf-8'),
-                filename=filename,
-                caption=(
-                    f"📄 Practice Sheets: {course_title}\n"
-                    f"📊 Format: {action.replace('_', ' ').title()}\n"
-                    f"📅 Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-            )
-            
-        except Exception as e:
-            logger.error(f"Error generating practice sheets: {e}")
-            await query.edit_message_text("❌ Error generating practice sheets file.")
-    
-    def format_all_sheets(self, practice_sheets):
-        """Format all sheets in one list"""
-        lines = ["📄 ALL PRACTICE SHEETS 📄\n"]
-        lines.append("=" * 50 + "\n")
-        
-        for i, pdf in enumerate(practice_sheets.get('pdfs', []), 1):
-            lines.append(f"{i}. {pdf.get('title', 'Untitled')}")
-            lines.append(f"   📁 Topic: {pdf.get('topic_name', 'Unknown')}")
-            lines.append(f"   📚 Category: {pdf.get('category', {}).get('categoryName', 'Unknown')}")
-            lines.append(f"   🏷️ Section: {pdf.get('section', {}).get('sectionName', 'Unknown')}")
-            lines.append(f"   👨‍🏫 Teacher: {pdf.get('teacherName', 'Unknown')}")
-            lines.append(f"   🔗 URL: {pdf.get('uploadPdf', 'No URL')}")
-            lines.append("")
-        
-        return '\n'.join(lines)
-    
-    def format_by_category(self, practice_sheets):
-        """Format sheets grouped by category"""
-        lines = ["📄 PRACTICE SHEETS BY CATEGORY 📄\n"]
-        lines.append("=" * 50 + "\n")
-        
-        # Group by category
-        categories = {}
-        for pdf in practice_sheets.get('pdfs', []):
-            category_name = pdf.get('category', {}).get('categoryName', 'Unknown')
-            if category_name not in categories:
-                categories[category_name] = []
-            categories[category_name].append(pdf)
-        
-        for category_name, pdfs in categories.items():
-            lines.append(f"\n📁 {category_name.upper()} ({len(pdfs)} sheets)")
-            lines.append("-" * 40)
-            
-            for i, pdf in enumerate(pdfs, 1):
-                lines.append(f"{i}. {pdf.get('title', 'Untitled')}")
-                lines.append(f"   👨‍🏫 {pdf.get('teacherName', 'Unknown')}")
-                lines.append(f"   🔗 {pdf.get('uploadPdf')}")
-                lines.append("")
-        
-        return '\n'.join(lines)
-    
-    def format_maths_only(self, practice_sheets):
-        """Format only Maths sheets"""
-        lines = ["🧮 MATHS PRACTICE SHEETS 🧮\n"]
-        lines.append("=" * 50 + "\n")
-        
-        maths_pdfs = []
-        for pdf in practice_sheets.get('pdfs', []):
-            category_name = pdf.get('category', {}).get('categoryName', '')
-            if 'math' in category_name.lower() or 'maths' in category_name.lower():
-                maths_pdfs.append(pdf)
-        
-        if not maths_pdfs:
-            lines.append("No Maths practice sheets found.")
-            return '\n'.join(lines)
-        
-        # Group by topic
-        topics = {}
-        for pdf in maths_pdfs:
-            topic_name = pdf.get('topic', {}).get('topicName', 'Unknown')
-            if topic_name not in topics:
-                topics[topic_name] = []
-            topics[topic_name].append(pdf)
-        
-        for topic_name, pdfs in topics.items():
-            lines.append(f"\n📚 {topic_name.upper()} ({len(pdfs)} sheets)")
-            lines.append("-" * 40)
-            
-            for i, pdf in enumerate(pdfs, 1):
-                lines.append(f"{i}. {pdf.get('title', 'Untitled')}")
-                lines.append(f"   👨‍🏫 {pdf.get('teacherName', 'Unknown')}")
-                lines.append(f"   🔗 {pdf.get('uploadPdf')}")
-                lines.append("")
-        
-        return '\n'.join(lines)
-    
-    def format_by_topic(self, practice_sheets):
-        """Format sheets grouped by topic"""
-        lines = ["📄 PRACTICE SHEETS BY TOPIC 📄\n"]
-        lines.append("=" * 50 + "\n")
-        
-        topics_data = practice_sheets.get('topics', [])
-        
-        for topic_data in topics_data:
-            topic_name = topic_data.get('topicName', 'Unknown Topic')
-            pdfs = topic_data.get('pdfs', [])
-            
-            lines.append(f"\n📌 {topic_name.upper()} ({len(pdfs)} sheets)")
-            lines.append("-" * 40)
-            
-            for i, pdf in enumerate(pdfs, 1):
-                lines.append(f"{i}. {pdf.get('title', 'Untitled')}")
-                lines.append(f"   📚 {pdf.get('category', {}).get('categoryName', 'Unknown')}")
-                lines.append(f"   👨‍🏫 {pdf.get('teacherName', 'Unknown')}")
-                lines.append(f"   🔗 {pdf.get('uploadPdf')}")
-                lines.append("")
-        
-        return '\n'.join(lines)
     
     def get_preferred_video_url(self, class_data, preferred_quality):
         """Get only the preferred quality video URL"""
@@ -557,14 +333,15 @@ The bot generates a structured text file with all the links."""
         
         return None
     
-    def generate_formatted_text_file(self, course_info, classes_data, preferred_quality, practice_sheets=None):
-        """Generate text file with proper arrangement of videos, PDFs, and practice sheets"""
+    def generate_formatted_text_file(self, course_info, classes_data, practice_sheets, preferred_quality):
+        """Generate text file with proper arrangement of videos, PDFs, and practice sheets by topic"""
         import re
         lines = []
         
-        # Add course header
-        lines.append("📚 COURSE CONTENT 📚\n")
-        lines.append("=" * 60)
+        # Initialize counters
+        video_count = 0
+        class_pdf_count = 0
+        practice_sheet_count = 0
         
         # First, collect all video classes and their PDFs
         all_classes = []
@@ -587,6 +364,9 @@ The bot generates a structured text file with all the links."""
                 # Get video URL
                 video_url = self.get_preferred_video_url(class_data, preferred_quality)
                 
+                if video_url:
+                    video_count += 1
+                
                 # Get PDFs for this class
                 pdfs = []
                 class_pdfs = class_data.get('classPdf', [])
@@ -597,8 +377,10 @@ The bot generates a structured text file with all the links."""
                         pdfs.append({
                             'name': pdf_name,
                             'url': pdf_url,
-                            'teacher': teacher_name
+                            'teacher': teacher_name,
+                            'type': 'class_pdf'
                         })
+                        class_pdf_count += 1
                 
                 if video_url:
                     all_classes.append({
@@ -613,66 +395,72 @@ The bot generates a structured text file with all the links."""
         # Sort classes by topic and then by class number
         all_classes.sort(key=lambda x: (x['topic_name'], x['class_number']))
         
-        # Group by topic
+        # Group by topic for classes
         current_topic = None
         
+        # Add classes section
         for class_info in all_classes:
             # Add topic header if it's a new topic
             if class_info['topic_name'] != current_topic:
                 if current_topic is not None:
                     lines.append("")  # Empty line between topics
                 current_topic = class_info['topic_name']
-                lines.append(f"📌 {current_topic.upper()}")
-                lines.append("-" * 40)
+                # You can uncomment the next line if you want topic headers
+                # lines.append(f"=== {current_topic.upper()} ===")
             
             # Add video line
-            video_line = f"Class-{class_info['class_number']} || {class_info['class_title']} | {class_info['teacher_name']}"
+            video_line = f"Class-{class_info['class_number']} || {class_info['class_title']} | {class_info['teacher_name']} | {class_info['topic_name']} | ({class_info['teacher_name'].upper()}): {class_info['video_url']}"
             lines.append(video_line)
-            lines.append(f"🎥 Video: {class_info['video_url']}")
             
             # Add PDFs for this class
-            if class_info['pdfs']:
-                lines.append("📎 Class PDFs:")
-                for pdf in class_info['pdfs']:
-                    pdf_line = f"  • {pdf['name']}: {pdf['url']}"
-                    lines.append(pdf_line)
+            for pdf in class_info['pdfs']:
+                pdf_line = f"{pdf['name']} ({pdf['teacher'].upper()}): {pdf['url']}"
+                lines.append(pdf_line)
             
             lines.append("")  # Empty line between classes
         
-        # Add practice sheets section if available
-        if practice_sheets and practice_sheets.get('pdfs'):
-            lines.append("\n\n" + "=" * 60)
-            lines.append("📄 PRACTICE SHEETS 📄")
-            lines.append("=" * 60)
+        # Add practice sheets section if there are any
+        if practice_sheets:
+            lines.append("")  # Add separator
+            lines.append("=== PRACTICE SHEETS ===")
+            lines.append("")
             
-            practice_pdfs = practice_sheets.get('pdfs', [])
+            # Group practice sheets by topic (from the practice sheets API)
+            practice_by_topic = {}
+            for sheet in practice_sheets:
+                topic_name = sheet.get('topic', {}).get('topicName', 'General')
+                if topic_name not in practice_by_topic:
+                    practice_by_topic[topic_name] = []
+                practice_by_topic[topic_name].append(sheet)
+                practice_sheet_count += 1
             
-            # Group practice sheets by category
-            practice_by_category = {}
-            for pdf in practice_pdfs:
-                category_name = pdf.get('category', {}).get('categoryName', 'Unknown')
-                if category_name not in practice_by_category:
-                    practice_by_category[category_name] = []
-                practice_by_category[category_name].append(pdf)
-            
-            for category_name, pdfs in practice_by_category.items():
-                lines.append(f"\n📁 {category_name.upper()}")
-                lines.append("-" * 40)
-                
-                for i, pdf in enumerate(pdfs, 1):
-                    lines.append(f"{i}. {pdf.get('title', 'Untitled')}")
-                    lines.append(f"   👨‍🏫 Teacher: {pdf.get('teacherName', 'Unknown')}")
-                    lines.append(f"   📚 Topic: {pdf.get('topic_name', 'Unknown')}")
-                    lines.append(f"   🔗 URL: {pdf.get('uploadPdf')}")
-                    lines.append("")
+            # Add practice sheets grouped by topic
+            for topic_name, sheets in practice_by_topic.items():
+                # lines.append(f"📚 {topic_name}:")
+                for sheet in sheets:
+                    title = sheet.get('title', 'Practice Sheet')
+                    description = sheet.get('description', '')
+                    pdf_url = sheet.get('uploadPdf', '')
+                    teacher = sheet.get('teacherName', 'Unknown Teacher')
+                    
+                    if pdf_url:
+                        # Format: Title (Teacher): URL
+                        sheet_line = f"{title}"
+                        if description and description.strip():
+                            sheet_line += f" - {description.strip()}"
+                        sheet_line += f" ({teacher.upper()}): {pdf_url}"
+                        lines.append(sheet_line)
+                lines.append("")  # Empty line between topics
         
-        # Add footer
-        lines.append("\n" + "=" * 60)
-        lines.append(f"🎥 Video Quality: {preferred_quality.upper()}")
-        lines.append(f"📅 Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append("=" * 60)
+        # Combine all lines
+        text_content = '\n'.join(lines)
         
-        return '\n'.join(lines)
+        # Return text content and counts
+        return text_content, {
+            'video_count': video_count,
+            'class_pdf_count': class_pdf_count,
+            'practice_sheet_count': practice_sheet_count
+        }
     
     async def quality_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
@@ -715,8 +503,7 @@ The bot generates a structured text file with all the links."""
             f"/help - Help & usage\n"
             f"/batches - Show all available batches\n"
             f"/quality - Change video quality (Current: {current_quality.upper()})\n"
-            f"/get_course - Fetch data for selected batch\n"
-            f"/sheets - Get practice sheets separately"
+            f"/get_course - Fetch data for selected batch"
         )
 
 def run_flask():
