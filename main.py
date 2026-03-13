@@ -100,13 +100,11 @@ The bot generates a structured text file with all the links."""
         await update.message.reply_text("📚 Fetching available batches...")
 
         try:
-            # Fetch all courses from API
             api_url = f"{self.api_base_url}/courses"
             logger.info(f"Fetching batches from: {api_url}")
 
             response = requests.get(api_url, timeout=30)
             logger.info(f"API Response Status: {response.status_code}")
-
             response.raise_for_status()
 
             data = response.json()
@@ -128,10 +126,9 @@ The bot generates a structured text file with all the links."""
             self.available_courses = courses
             context.user_data['available_courses'] = courses
 
-            # Create keyboard with batches
             keyboard = []
             for i, course in enumerate(courses, 1):
-                course_title = course.get('title', f'Batch {i}')[:64]  # Limit title length
+                course_title = course.get('title', f'Batch {i}')[:64]
                 keyboard.append([InlineKeyboardButton(f"{i}. {course_title}", callback_data=f"course_{i-1}")])
 
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -165,11 +162,9 @@ The bot generates a structured text file with all the links."""
             course_id = selected_course.get('id')
             course_title = selected_course.get('title', 'Unknown Course')
 
-            # Store selected course ID in context for get_course_command
             context.user_data['selected_course_id'] = course_id
             context.user_data['selected_course_title'] = course_title
 
-            # Automatically fetch course data and send as file
             await query.edit_message_text(f"✅ Selected: {course_title}\n\nFetching course data...")
             await self.fetch_and_send_course_data(update, context, course_id, course_title)
 
@@ -182,7 +177,6 @@ The bot generates a structured text file with all the links."""
         user_id = update.effective_user.id
         preferred_quality = self.user_preferences.get(user_id, "720p")
 
-        # Check if we have a selected course
         course_id = context.user_data.get('selected_course_id')
         course_title = context.user_data.get('selected_course_title', 'Unknown Course')
 
@@ -206,14 +200,16 @@ The bot generates a structured text file with all the links."""
             preferred_quality = self.user_preferences.get(user_id, "720p")
 
         try:
-            # Step 1: Fetch topics for the course
-            topics_url = f"{self.api_base_url}/courses/{course_id}/topics"
+            # Step 1: Fetch topics using the correct endpoint
+            # API: GET /topic-and-section?courseId={courseId}&userId=0
+            # Response: { state: 200, data: { course: {...}, topics: [ { topicId, topicName, ... } ] } }
+            topics_url = f"{self.api_base_url}/topic-and-section?courseId={course_id}&userId=0"
             logger.info(f"Fetching topics from: {topics_url}")
 
             topics_response = requests.get(topics_url, timeout=30)
             topics_response.raise_for_status()
             topics_data = topics_response.json()
-            logger.info(f"Topics API Response Keys: {list(topics_data.keys())}")
+            logger.info(f"Topics API state: {topics_data.get('state')}")
 
             if topics_data.get('state') != 200:
                 error_msg = topics_data.get('msg', 'Unknown error')
@@ -221,7 +217,7 @@ The bot generates a structured text file with all the links."""
                 await update.effective_message.reply_text(f"❌ API Error: {error_msg}")
                 return
 
-            topics = topics_data.get('data', [])
+            topics = topics_data.get('data', {}).get('topics', [])
             if not topics:
                 await update.effective_message.reply_text("❌ No topics found for this course.")
                 return
@@ -233,13 +229,13 @@ The bot generates a structured text file with all the links."""
             # Response: { state: 200, data: { topicId, courseId, classes: [...] } }
             classes_data = []
             for topic in topics:
-                topic_id = topic.get('_id') or topic.get('id')
-                topic_name = topic.get('topicName') or topic.get('name', 'Unknown Topic')
+                topic_id = topic.get('topicId')
+                topic_name = topic.get('topicName', 'Unknown Topic')
                 if not topic_id:
                     continue
 
                 classes_url = f"{self.api_base_url}/topics/{topic_id}/classes?courseId={course_id}&userId=0"
-                logger.info(f"Fetching classes from: {classes_url}")
+                logger.info(f"Fetching classes for topic '{topic_name}' from: {classes_url}")
 
                 try:
                     cls_response = requests.get(classes_url, timeout=30)
@@ -280,7 +276,6 @@ The bot generates a structured text file with all the links."""
                     for topic in topics_ps:
                         pdfs = topic.get('pdfs', [])
                         practice_sheets.extend(pdfs)
-
                     logger.info(f"Found {len(practice_sheets)} practice sheets")
                 else:
                     logger.warning(f"Practice sheets API returned error: {practice_data.get('msg')}")
@@ -292,10 +287,8 @@ The bot generates a structured text file with all the links."""
                 course_info, classes_data, practice_sheets, preferred_quality
             )
 
-            # Create filename
             filename = f"{course_title.replace(' ', '_')}.txt"
 
-            # Create caption with counts
             caption = (
                 f"📚 Course Data: {course_title}\n"
                 f"🎥 Videos: {counts['video_count']}\n"
@@ -305,7 +298,6 @@ The bot generates a structured text file with all the links."""
                 f"📅 Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
-            # Send as text file
             await update.effective_message.reply_document(
                 document=text_content.encode('utf-8'),
                 filename=filename,
@@ -364,12 +356,10 @@ The bot generates a structured text file with all the links."""
         import re
         lines = []
 
-        # Initialize counters
         video_count = 0
         class_pdf_count = 0
         practice_sheet_count = 0
 
-        # Collect all video classes and their PDFs
         all_classes = []
 
         for topic in classes_data:
@@ -421,37 +411,31 @@ The bot generates a structured text file with all the links."""
         # Sort classes by topic and then by class number
         all_classes.sort(key=lambda x: (x['topic_name'], x['class_number']))
 
-        # Group by topic for classes
         current_topic = None
 
-        # Add classes section
         for class_info in all_classes:
-            # Add topic header if it's a new topic
             if class_info['topic_name'] != current_topic:
                 if current_topic is not None:
-                    lines.append("")  # Empty line between topics
+                    lines.append("")
                 current_topic = class_info['topic_name']
                 # Uncomment to show topic headers:
                 # lines.append(f"=== {current_topic.upper()} ===")
 
-            # Add video line
             video_line = f"Class-{class_info['class_number']} || {class_info['class_title']} | {class_info['teacher_name']} | {class_info['topic_name']} | ({class_info['teacher_name'].upper()}): {class_info['video_url']}"
             lines.append(video_line)
 
-            # Add PDFs for this class
             for pdf in class_info['pdfs']:
                 pdf_line = f"{pdf['name']} ({pdf['teacher'].upper()}): {pdf['url']}"
                 lines.append(pdf_line)
 
-            lines.append("")  # Empty line between classes
+            lines.append("")
 
-        # Add practice sheets section if there are any
+        # Add practice sheets section
         if practice_sheets:
             lines.append("")
             lines.append("=== PRACTICE SHEETS ===")
             lines.append("")
 
-            # Group practice sheets by topic
             practice_by_topic = {}
             for sheet in practice_sheets:
                 topic_name = sheet.get('topic', {}).get('topicName', 'General')
@@ -460,7 +444,6 @@ The bot generates a structured text file with all the links."""
                 practice_by_topic[topic_name].append(sheet)
                 practice_sheet_count += 1
 
-            # Add practice sheets grouped by topic
             for topic_name, sheets in practice_by_topic.items():
                 for sheet in sheets:
                     title = sheet.get('title', 'Practice Sheet')
@@ -474,9 +457,8 @@ The bot generates a structured text file with all the links."""
                             sheet_line += f" - {description.strip()}"
                         sheet_line += f" ({teacher.upper()}): {pdf_url}"
                         lines.append(sheet_line)
-                lines.append("")  # Empty line between topics
+                lines.append("")
 
-        # Combine all lines
         text_content = '\n'.join(lines)
 
         return text_content, {
@@ -545,14 +527,12 @@ def main():
     logger.info("✅ Bot token found, starting bot...")
 
     try:
-        # Start Flask in a separate thread
         import threading
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
 
         logger.info(f"🌐 Flask server started on port {port}")
 
-        # Start the bot
         bot = CourseBot(token)
         logger.info("🤖 Bot is starting...")
         bot.application.run_polling(allowed_updates=Update.ALL_TYPES)
