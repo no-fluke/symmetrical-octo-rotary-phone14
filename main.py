@@ -315,40 +315,14 @@ The bot generates a structured text file with all the links."""
             await update.effective_message.reply_text("❌ Error fetching course data. Please try again later.")
 
     def get_preferred_video_url(self, class_data, preferred_quality):
-        """Get only the preferred quality video URL"""
+        """Return only the exact selected quality mp4 URL, nothing else"""
         mp4_recordings = class_data.get('mp4Recordings', [])
 
-        # If no recordings, try class_link
-        if not mp4_recordings:
-            class_link = class_data.get('class_link')
-            if class_link and class_link.startswith(('http://', 'https://')):
-                return class_link
-            return None
-
-        # Look for exact quality match first
         for recording in mp4_recordings:
-            quality = recording.get('quality', '').lower()
-            if quality == preferred_quality.lower():
+            if recording.get('quality', '').lower() == preferred_quality.lower():
                 return recording.get('url')
 
-        # If exact match not found, look for closest quality
-        quality_priority = ['1080p', '720p', '480p', '360p', '240p']
-        if preferred_quality.lower() in quality_priority:
-            pref_index = quality_priority.index(preferred_quality.lower())
-            for i in range(pref_index, len(quality_priority)):
-                for recording in mp4_recordings:
-                    if recording.get('quality', '').lower() == quality_priority[i]:
-                        return recording.get('url')
-
-        # If still not found, return the first available recording
-        if mp4_recordings:
-            return mp4_recordings[0].get('url')
-
-        # Fallback to class_link
-        class_link = class_data.get('class_link')
-        if class_link and class_link.startswith(('http://', 'https://')):
-            return class_link
-
+        # No exact quality match found - skip this class
         return None
 
     def generate_formatted_text_file(self, course_info, classes_data, practice_sheets, preferred_quality):
@@ -405,11 +379,12 @@ The bot generates a structured text file with all the links."""
                         'teacher_name': teacher_name,
                         'topic_name': topic_name,
                         'video_url': video_url,
-                        'pdfs': pdfs
+                        'pdfs': pdfs,
+                        'priority': class_data.get('priority', 9999)
                     })
 
-        # Sort classes by topic and then by class number
-        all_classes.sort(key=lambda x: (x['topic_name'], x['class_number']))
+        # Sort classes by their original priority (order taken)
+        all_classes.sort(key=lambda x: x['priority'])
 
         current_topic = None
 
