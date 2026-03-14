@@ -315,14 +315,21 @@ The bot generates a structured text file with all the links."""
             await update.effective_message.reply_text("❌ Error fetching course data. Please try again later.")
 
     def get_preferred_video_url(self, class_data, preferred_quality):
-        """Return only the exact selected quality mp4 URL, nothing else"""
+        """Return selected quality mp4 URL.
+        If selected quality not available, fallback to class_link.
+        Never skips a class."""
         mp4_recordings = class_data.get('mp4Recordings', [])
 
+        # Exact quality match
         for recording in mp4_recordings:
             if recording.get('quality', '').lower() == preferred_quality.lower():
                 return recording.get('url')
 
-        # No exact quality match found - skip this class
+        # Quality not available - fallback to class_link
+        class_link = class_data.get('class_link')
+        if class_link and class_link.startswith(('http://', 'https://')):
+            return class_link
+
         return None
 
     def generate_formatted_text_file(self, course_info, classes_data, practice_sheets, preferred_quality):
@@ -351,7 +358,7 @@ The bot generates a structured text file with all the links."""
                     if match:
                         class_number = match.group(1).zfill(2)
 
-                # Get video URL
+                # Get video URL for selected quality
                 video_url = self.get_preferred_video_url(class_data, preferred_quality)
 
                 if video_url:
@@ -372,16 +379,16 @@ The bot generates a structured text file with all the links."""
                         })
                         class_pdf_count += 1
 
-                if video_url:
-                    all_classes.append({
-                        'class_number': class_number,
-                        'class_title': class_title,
-                        'teacher_name': teacher_name,
-                        'topic_name': topic_name,
-                        'video_url': video_url,
-                        'pdfs': pdfs,
-                        'priority': class_data.get('priority', 9999)
-                    })
+                # Always append class regardless of video availability
+                all_classes.append({
+                    'class_number': class_number,
+                    'class_title': class_title,
+                    'teacher_name': teacher_name,
+                    'topic_name': topic_name,
+                    'video_url': video_url,
+                    'pdfs': pdfs,
+                    'priority': class_data.get('priority', 9999)
+                })
 
         # Sort classes by their original priority (order taken)
         all_classes.sort(key=lambda x: x['priority'])
@@ -396,9 +403,12 @@ The bot generates a structured text file with all the links."""
                 # Uncomment to show topic headers:
                 # lines.append(f"=== {current_topic.upper()} ===")
 
-            video_line = f"Class-{class_info['class_number']} || {class_info['class_title']} | {class_info['teacher_name']} | {class_info['topic_name']} | ({class_info['teacher_name'].upper()}): {class_info['video_url']}"
+            # Class video line
+            video_part = f" ({class_info['teacher_name'].upper()}): {class_info['video_url']}" if class_info['video_url'] else " (NO LINK AVAILABLE)"
+            video_line = f"Class-{class_info['class_number']} || {class_info['class_title']} | {class_info['teacher_name']} | {class_info['topic_name']} |{video_part}"
             lines.append(video_line)
 
+            # PDFs for this class
             for pdf in class_info['pdfs']:
                 pdf_line = f"{pdf['name']} ({pdf['teacher'].upper()}): {pdf['url']}"
                 lines.append(pdf_line)
