@@ -4,12 +4,16 @@ import requests
 from datetime import datetime
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    CallbackQueryHandler,
+)
 
-# Get port from environment variable (Render provides this)
 port = int(os.environ.get('PORT', 5000))
-
-# Initialize Flask app
 app = Flask(__name__)
 
 @app.route('/')
@@ -20,12 +24,14 @@ def home():
 def health():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-# Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+COURSES_PER_PAGE = 20
+
 
 class CourseBot:
     def __init__(self, token: str):
@@ -44,6 +50,8 @@ class CourseBot:
         self.application.add_handler(CommandHandler("quality", self.quality_command))
         self.application.add_handler(CallbackQueryHandler(self.quality_callback, pattern="^quality_"))
         self.application.add_handler(CallbackQueryHandler(self.course_callback, pattern="^course_"))
+        self.application.add_handler(CallbackQueryHandler(self.batches_page_callback, pattern="^batches_page_"))
+        self.application.add_handler(CallbackQueryHandler(lambda u, c: u.callback_query.answer(), pattern="^noop$"))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,9 +60,7 @@ class CourseBot:
             self.user_preferences[user_id] = "720p"
 
         welcome_text = f"""🤖 Course Data Bot
-
 I can fetch course data from the API and send you formatted text files containing:
-
 • Topics and classes
 • Video lecture links (your chosen quality)
 • PDF material links
@@ -64,49 +70,41 @@ I can fetch course data from the API and send you formatted text files containin
 Your current video quality preference: {self.user_preferences[user_id]}
 
 Commands:
-/start - Show this message  
-/help - Get help information  
+/start - Show this message
+/help - Get help information
 /batches - Show all available batches
-/quality - Change video quality preference  
+/quality - Change video quality preference
 /get_course - Fetch course data from API and get a text file"""
         await update.message.reply_text(welcome_text)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text = """📖 Help Guide
 
-/batches
-- Shows all available courses/batches
-- Select a batch to get its data
-
-/get_course
-- Fetches data from the course API
-- Generates a .txt file with:
-  • Course info
-  • Topics and classes
-  • Video links (your preferred quality)
-  • Class PDF links with names
-  • Practice sheets PDF links
-
-/quality
-- Change your preferred video quality
-- Available options: 240p, 360p, 480p, 720p, 1080p
-- The bot will prioritize your chosen quality
+/batches - Shows all available courses/batches
+    - Select a batch to get its data
+/get_course - Fetches data from the course API
+    - Generates a .txt file with:
+        • Course info
+        • Topics and classes
+        • Video links (your preferred quality)
+        • Class PDF links with names
+        • Practice sheets PDF links
+/quality - Change your preferred video quality
+    - Available options: 240p, 360p, 480p, 720p, 1080p
+    - The bot will prioritize your chosen quality
 
 The bot generates a structured text file with all the links."""
         await update.message.reply_text(help_text)
 
     async def batches_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show all available batches/courses"""
+        """Show all available batches/courses with pagination"""
         await update.message.reply_text("📚 Fetching available batches...")
-
         try:
             api_url = f"{self.api_base_url}/courses"
             logger.info(f"Fetching batches from: {api_url}")
-
             response = requests.get(api_url, timeout=30)
             logger.info(f"API Response Status: {response.status_code}")
             response.raise_for_status()
-
             data = response.json()
             logger.info(f"API Response Data: {data}")
 
@@ -125,18 +123,7 @@ The bot generates a structured text file with all the links."""
 
             self.available_courses = courses
             context.user_data['available_courses'] = courses
-
-            keyboard = []
-            for i, course in enumerate(courses, 1):
-                course_title = course.get('title', f'Batch {i}')[:64]
-                keyboard.append([InlineKeyboardButton(f"{i}. {course_title}", callback_data=f"course_{i-1}")])
-
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await update.message.reply_text(
-                f"📚 Available Batches ({len(courses)} found):\n\nClick on a batch to get its data:",
-                reply_markup=reply_markup
-            )
+            await self.send_batches_page(update.message, context, page=0)
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Network error fetching batches: {e}")
@@ -145,15 +132,55 @@ The bot generates a structured text file with all the links."""
             logger.error(f"Unexpected error fetching batches: {e}")
             await update.message.reply_text("❌ Error fetching batches. Please try again later.")
 
+    async def send_batches_page(self, message_or_query, context, page: int):
+        """Build and send (or edit) a paginated batch list"""
+        courses = context.user_data.get('available_courses', [])
+        per_page = COURSES_PER_PAGE
+        total = len(courses)
+        total_pages = (total + per_page - 1) // per_page
+        start = page * per_page
+        end = min(start + per_page, total)
+        page_courses = courses[start:end]
+
+        keyboard = []
+        for i, course in enumerate(page_courses, start=start):
+            course_title = course.get('title', f'Batch {i+1}')[:50]
+            keyboard.append([
+                InlineKeyboardButton(f"{i+1}. {course_title}", callback_data=f"course_{i}")
+            ])
+
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"batches_page_{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"batches_page_{page + 1}"))
+
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"📚 Available Batches ({total} total) — Page {page + 1}/{total_pages}:\n\nClick a batch to get its data:"
+
+        if hasattr(message_or_query, 'reply_text'):
+            await message_or_query.reply_text(text, reply_markup=reply_markup)
+        else:
+            await message_or_query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def batches_page_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle Prev/Next pagination buttons"""
+        query = update.callback_query
+        await query.answer()
+        page = int(query.data.replace("batches_page_", ""))
+        await self.send_batches_page(query, context, page=page)
+
     async def course_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle course selection"""
         query = update.callback_query
         await query.answer()
-
         try:
             course_index = int(query.data.replace("course_", ""))
             courses = context.user_data.get('available_courses', [])
-
             if not courses or course_index >= len(courses):
                 await query.edit_message_text("❌ Course not found. Please try /batches again.")
                 return
@@ -161,7 +188,6 @@ The bot generates a structured text file with all the links."""
             selected_course = courses[course_index]
             course_id = selected_course.get('id')
             course_title = selected_course.get('title', 'Unknown Course')
-
             context.user_data['selected_course_id'] = course_id
             context.user_data['selected_course_title'] = course_title
 
@@ -176,7 +202,6 @@ The bot generates a structured text file with all the links."""
         """Fetch course data for the selected batch"""
         user_id = update.effective_user.id
         preferred_quality = self.user_preferences.get(user_id, "720p")
-
         course_id = context.user_data.get('selected_course_id')
         course_title = context.user_data.get('selected_course_title', 'Unknown Course')
 
@@ -190,22 +215,18 @@ The bot generates a structured text file with all the links."""
             f"📡 Fetching data for: {course_title}\n"
             f"🎥 Using quality preference: {preferred_quality.upper()}"
         )
-
         await self.fetch_and_send_course_data(update, context, course_id, course_title, preferred_quality)
 
-    async def fetch_and_send_course_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE, course_id: str, course_title: str, preferred_quality: str = None):
+    async def fetch_and_send_course_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                         course_id: str, course_title: str, preferred_quality: str = None):
         """Fetch and process course data and send as file"""
         if preferred_quality is None:
             user_id = update.effective_user.id
             preferred_quality = self.user_preferences.get(user_id, "720p")
 
         try:
-            # Step 1: Fetch topics using the correct endpoint
-            # API: GET /topic-and-section?courseId={courseId}&userId=0
-            # Response: { state: 200, data: { course: {...}, topics: [ { topicId, topicName, ... } ] } }
             topics_url = f"{self.api_base_url}/topic-and-section?courseId={course_id}&userId=0"
             logger.info(f"Fetching topics from: {topics_url}")
-
             topics_response = requests.get(topics_url, timeout=30)
             topics_response.raise_for_status()
             topics_data = topics_response.json()
@@ -224,9 +245,6 @@ The bot generates a structured text file with all the links."""
 
             logger.info(f"Found {len(topics)} topics")
 
-            # Step 2: Fetch classes for each topic
-            # API: GET /topics/{topicId}/classes?courseId={courseId}&userId=0
-            # Response: { state: 200, data: { topicId, courseId, classes: [...] } }
             classes_data = []
             for topic in topics:
                 topic_id = topic.get('topicId')
@@ -241,7 +259,6 @@ The bot generates a structured text file with all the links."""
                     cls_response = requests.get(classes_url, timeout=30)
                     cls_response.raise_for_status()
                     cls_data = cls_response.json()
-
                     if cls_data.get('state') == 200:
                         topic_classes = cls_data.get('data', {}).get('classes', [])
                         classes_data.append({
@@ -259,18 +276,12 @@ The bot generates a structured text file with all the links."""
                 return
 
             course_info = {'title': course_title}
-
-            # Step 3: Fetch practice sheets PDFs
-            # API: GET /courses/{courseId}/pdfs?groupBy=topic
-            # Response: { state: 200, data: { topics: [ { topicName, pdfs: [...] } ] } }
             practice_sheets = []
             try:
                 practice_sheets_url = f"{self.api_base_url}/courses/{course_id}/pdfs?groupBy=topic"
                 logger.info(f"Fetching practice sheets from: {practice_sheets_url}")
-
                 practice_response = requests.get(practice_sheets_url, timeout=30)
                 practice_data = practice_response.json()
-
                 if practice_data.get('state') == 200:
                     topics_ps = practice_data.get('data', {}).get('topics', [])
                     for topic in topics_ps:
@@ -281,14 +292,12 @@ The bot generates a structured text file with all the links."""
                     logger.warning(f"Practice sheets API returned error: {practice_data.get('msg')}")
             except Exception as e:
                 logger.error(f"Error fetching practice sheets: {e}")
-                # Continue without practice sheets
 
             text_content, counts = self.generate_formatted_text_file(
                 course_info, classes_data, practice_sheets, preferred_quality
             )
 
             filename = f"{course_title.replace(' ', '_')}.txt"
-
             caption = (
                 f"📚 Course Data: {course_title}\n"
                 f"🎥 Videos: {counts['video_count']}\n"
@@ -315,56 +324,42 @@ The bot generates a structured text file with all the links."""
             await update.effective_message.reply_text("❌ Error fetching course data. Please try again later.")
 
     def get_preferred_video_url(self, class_data, preferred_quality):
-        """Return selected quality mp4 URL.
-        If selected quality not available, fallback to class_link.
-        Never skips a class."""
+        """Return selected quality mp4 URL. Fallback to class_link if not available."""
         mp4_recordings = class_data.get('mp4Recordings', [])
-
-        # Exact quality match
         for recording in mp4_recordings:
             if recording.get('quality', '').lower() == preferred_quality.lower():
                 return recording.get('url')
-
-        # Quality not available - fallback to class_link
         class_link = class_data.get('class_link')
         if class_link and class_link.startswith(('http://', 'https://')):
             return class_link
-
         return None
 
     def generate_formatted_text_file(self, course_info, classes_data, practice_sheets, preferred_quality):
-        """Generate text file with proper arrangement of videos, PDFs, and practice sheets by topic"""
+        """Generate text file with topic name in () before every link line"""
         import re
-        lines = []
 
+        lines = []
         video_count = 0
         class_pdf_count = 0
         practice_sheet_count = 0
-
         all_classes = []
 
         for topic in classes_data:
             topic_name = topic.get('topicName', 'Unknown Topic')
             topic_classes = topic.get('classes', [])
-
             for class_data in topic_classes:
                 class_title = class_data.get('title', '')
                 teacher_name = class_data.get('teacherName', 'Unknown Teacher')
-
-                # Extract class number from title
                 class_number = "01"
                 if class_title:
                     match = re.search(r'(\d+)', class_title)
                     if match:
                         class_number = match.group(1).zfill(2)
 
-                # Get video URL for selected quality
                 video_url = self.get_preferred_video_url(class_data, preferred_quality)
-
                 if video_url:
                     video_count += 1
 
-                # Get PDFs for this class
                 pdfs = []
                 class_pdfs = class_data.get('classPdf', [])
                 for pdf in class_pdfs:
@@ -379,7 +374,6 @@ The bot generates a structured text file with all the links."""
                         })
                         class_pdf_count += 1
 
-                # Always append class regardless of video availability
                 all_classes.append({
                     'class_number': class_number,
                     'class_title': class_title,
@@ -390,35 +384,30 @@ The bot generates a structured text file with all the links."""
                     'priority': class_data.get('priority', 9999)
                 })
 
-        # Sort classes by their original priority (order taken)
         all_classes.sort(key=lambda x: x['priority'])
 
-        current_topic = None
-
         for class_info in all_classes:
-            if class_info['topic_name'] != current_topic:
-                if current_topic is not None:
-                    lines.append("")
-                current_topic = class_info['topic_name']
-                # Uncomment to show topic headers:
-                # lines.append(f"=== {current_topic.upper()} ===")
+            topic_tag = f"({class_info['topic_name'].upper()})"
 
-            # Class video line
-            video_part = f" ({class_info['teacher_name'].upper()}): {class_info['video_url']}" if class_info['video_url'] else " (NO LINK AVAILABLE)"
-            video_line = f"Class-{class_info['class_number']} || {class_info['class_title']} | {class_info['teacher_name']} | {class_info['topic_name']} |{video_part}"
+            # Video line
+            video_part = (f" ({class_info['teacher_name'].upper()}): {class_info['video_url']}"
+                          if class_info['video_url'] else " (NO LINK AVAILABLE)")
+            video_line = (f"{topic_tag} Class-{class_info['class_number']} || "
+                          f"{class_info['class_title']} | {class_info['teacher_name']} |{video_part}")
             lines.append(video_line)
 
-            # PDFs for this class
+            # PDF lines — topic tag on each one
             for pdf in class_info['pdfs']:
-                pdf_line = f"{pdf['name']} ({pdf['teacher'].upper()}): {pdf['url']}"
+                pdf_line = f"{topic_tag} {pdf['name']} ({pdf['teacher'].upper()}): {pdf['url']}"
                 lines.append(pdf_line)
 
             lines.append("")
 
-        # Add practice sheets section
+        # Practice sheets
         if practice_sheets:
-            lines.append("")
-            lines.append("=== PRACTICE SHEETS ===")
+            lines.append("=" * 60)
+            lines.append(" (PRACTICE SHEETS)")
+            lines.append("=" * 60)
             lines.append("")
 
             practice_by_topic = {}
@@ -430,14 +419,14 @@ The bot generates a structured text file with all the links."""
                 practice_sheet_count += 1
 
             for topic_name, sheets in practice_by_topic.items():
+                topic_tag = f"({topic_name.upper()})"
                 for sheet in sheets:
                     title = sheet.get('title', 'Practice Sheet')
                     description = sheet.get('description', '')
                     pdf_url = sheet.get('uploadPdf', '')
                     teacher = sheet.get('teacherName', 'Unknown Teacher')
-
                     if pdf_url:
-                        sheet_line = f"{title}"
+                        sheet_line = f"{topic_tag} {title}"
                         if description and description.strip():
                             sheet_line += f" - {description.strip()}"
                         sheet_line += f" ({teacher.upper()}): {pdf_url}"
@@ -445,7 +434,6 @@ The bot generates a structured text file with all the links."""
                 lines.append("")
 
         text_content = '\n'.join(lines)
-
         return text_content, {
             'video_count': video_count,
             'class_pdf_count': class_pdf_count,
@@ -465,7 +453,6 @@ The bot generates a structured text file with all the links."""
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-
         await update.message.reply_text(
             "🎥 Select your preferred video quality:",
             reply_markup=reply_markup
@@ -474,19 +461,14 @@ The bot generates a structured text file with all the links."""
     async def quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-
         user_id = query.from_user.id
         quality = query.data.replace("quality_", "")
-
         self.user_preferences[user_id] = quality
-        await query.edit_message_text(
-            f"✅ Video quality preference set to: {quality.upper()}"
-        )
+        await query.edit_message_text(f"✅ Video quality preference set to: {quality.upper()}")
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         current_quality = self.user_preferences.get(user_id, "720p")
-
         await update.message.reply_text(
             f"👋 Available commands:\n\n"
             f"/start - Show welcome message\n"
@@ -503,25 +485,21 @@ def run_flask():
 
 def main():
     token = os.getenv('TELEGRAM_BOT_TOKEN') or os.getenv('BOT_TOKEN')
-
     if not token:
         logger.error("❌ TELEGRAM_BOT_TOKEN environment variable is required")
         logger.error("Please set TELEGRAM_BOT_TOKEN in your Render environment variables")
         return
 
     logger.info("✅ Bot token found, starting bot...")
-
     try:
         import threading
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-
         logger.info(f"🌐 Flask server started on port {port}")
 
         bot = CourseBot(token)
         logger.info("🤖 Bot is starting...")
         bot.application.run_polling(allowed_updates=Update.ALL_TYPES)
-
     except Exception as e:
         logger.error(f"❌ Failed to start bot: {e}")
 
